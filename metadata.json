@@ -1,0 +1,6 @@
+{
+  "name": "RightClickDash",
+  "description": "Injeksi event mouse (klik kanan, klik kiri, tahan) ke layar via overlay mengambang dengan backend Shizuku dan Root",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
