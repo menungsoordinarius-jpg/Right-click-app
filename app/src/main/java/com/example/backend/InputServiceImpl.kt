@@ -43,6 +43,16 @@ class InputServiceImpl : IInputService.Stub() {
     private var injectInputEventMethod: Method? = null
     private var setDisplayIdMethod: Method? = null
 
+    // State untuk fitur Seret (Tahan & Geser)
+    @Volatile
+    private var activeDragDownTime: Long = 0L
+    @Volatile
+    private var activeDragButton: Int = 0
+    @Volatile
+    private var moveHeldCounter: Int = 0
+    @Volatile
+    private var lastMoveHeldTime: Long = 0L
+
     init {
         initHiddenApi()
     }
@@ -96,7 +106,29 @@ class InputServiceImpl : IInputService.Stub() {
 
     override fun move(x: Float, y: Float) {
         handler.post {
-            executeMove(x, y)
+            if (activeDragButton != 0 && activeDragDownTime != 0L) {
+                executeMoveHeld(x, y, activeDragButton)
+            } else {
+                executeMove(x, y)
+            }
+        }
+    }
+
+    override fun pressDown(x: Float, y: Float, button: Int) {
+        handler.post {
+            executePressDown(x, y, button)
+        }
+    }
+
+    override fun moveHeld(x: Float, y: Float, button: Int) {
+        handler.post {
+            executeMoveHeld(x, y, button)
+        }
+    }
+
+    override fun release(x: Float, y: Float, button: Int) {
+        handler.post {
+            executeRelease(x, y, button)
         }
     }
 
@@ -165,6 +197,79 @@ class InputServiceImpl : IInputService.Stub() {
     private fun executeMove(x: Float, y: Float) {
         val now = SystemClock.uptimeMillis()
         injectEvent(createMouseEvent(MotionEvent.ACTION_HOVER_MOVE, x, y, 0, 0, now, now))
+    }
+
+    private fun executePressDown(x: Float, y: Float, button: Int) {
+        try {
+            Log.i(TAG, "pressDown: koordinat ($x, $y), button=$button")
+            val now = SystemClock.uptimeMillis()
+
+            // Hover move ke posisi klik
+            injectEvent(createMouseEvent(MotionEvent.ACTION_HOVER_MOVE, x, y, 0, 0, now, now))
+            SystemClock.sleep(12)
+
+            val downTime = SystemClock.uptimeMillis()
+            activeDragDownTime = downTime
+            activeDragButton = button
+            moveHeldCounter = 0
+            lastMoveHeldTime = 0L
+
+            // Action Down dengan buttonState aktif
+            injectEvent(createMouseEvent(MotionEvent.ACTION_DOWN, x, y, button, 0, downTime, downTime))
+            SystemClock.sleep(12)
+
+            // Action Button Press
+            val pressTime = SystemClock.uptimeMillis()
+            injectEvent(createMouseEvent(MotionEvent.ACTION_BUTTON_PRESS, x, y, button, button, downTime, pressTime))
+            Log.i(TAG, "pressDown sukses: downTime=$downTime, button=$button ditahan")
+        } catch (t: Throwable) {
+            Log.e(TAG, "pressDown error: ${t.message}", t)
+        }
+    }
+
+    private fun executeMoveHeld(x: Float, y: Float, button: Int) {
+        try {
+            val now = SystemClock.uptimeMillis()
+            // Batasi maksimal sekitar 60 kali per detik (~16 ms per event)
+            if (now - lastMoveHeldTime < 16L) {
+                return
+            }
+            lastMoveHeldTime = now
+
+            val downTime = if (activeDragDownTime != 0L) activeDragDownTime else now
+            val btn = if (activeDragButton != 0) activeDragButton else button
+
+            injectEvent(createMouseEvent(MotionEvent.ACTION_MOVE, x, y, btn, 0, downTime, now))
+            moveHeldCounter++
+            if (moveHeldCounter % 30 == 0 || moveHeldCounter == 1) {
+                Log.d(TAG, "moveHeld: koordinat ($x, $y), total moveHeld dikirim=$moveHeldCounter")
+            }
+        } catch (t: Throwable) {
+            Log.e(TAG, "moveHeld error: ${t.message}", t)
+        }
+    }
+
+    private fun executeRelease(x: Float, y: Float, button: Int) {
+        try {
+            Log.i(TAG, "release: koordinat ($x, $y), button=$button, total moveHeld sebelum release=$moveHeldCounter")
+            val now = SystemClock.uptimeMillis()
+            val downTime = if (activeDragDownTime != 0L) activeDragDownTime else now
+            val btn = if (activeDragButton != 0) activeDragButton else button
+
+            // Action Button Release
+            injectEvent(createMouseEvent(MotionEvent.ACTION_BUTTON_RELEASE, x, y, 0, btn, downTime, now))
+            SystemClock.sleep(12)
+
+            // Action Up (buttonState = 0)
+            val upTime = SystemClock.uptimeMillis()
+            injectEvent(createMouseEvent(MotionEvent.ACTION_UP, x, y, 0, 0, downTime, upTime))
+
+            activeDragDownTime = 0L
+            activeDragButton = 0
+            Log.i(TAG, "release sukses: tombol $btn dilepas, total moveHeld=$moveHeldCounter")
+        } catch (t: Throwable) {
+            Log.e(TAG, "release error: ${t.message}", t)
+        }
     }
 
     private fun createMouseEvent(

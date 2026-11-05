@@ -32,6 +32,18 @@ class ShizukuUserService : IInputService.Stub {
         delegate.move(x, y)
     }
 
+    override fun pressDown(x: Float, y: Float, button: Int) {
+        delegate.pressDown(x, y, button)
+    }
+
+    override fun moveHeld(x: Float, y: Float, button: Int) {
+        delegate.moveHeld(x, y, button)
+    }
+
+    override fun release(x: Float, y: Float, button: Int) {
+        delegate.release(x, y, button)
+    }
+
     /**
      * Called when Shizuku UserService is destroyed
      */

@@ -7,6 +7,7 @@ import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.content.res.Configuration
 import android.graphics.PixelFormat
 import android.os.Build
 import android.os.IBinder
@@ -21,6 +22,7 @@ import android.widget.Toast
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -78,6 +80,7 @@ class OverlayService : Service() {
     private val isHiddenState = mutableStateOf(false)
     private val isTapModeState = mutableStateOf(false)
     private val holdDurationState = mutableLongStateOf(800L)
+    private val heldButtonState = mutableIntStateOf(0)
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -117,6 +120,35 @@ class OverlayService : Service() {
         return START_STICKY
     }
 
+    override fun onConfigurationChanged(newConfig: Configuration) {
+        super.onConfigurationChanged(newConfig)
+        Log.i(TAG, "onConfigurationChanged dipanggil (orientasi layar berubah)")
+        readScreenDimensions()
+
+        // Clamp ulang posisi kursor ke batas layar yang baru
+        val clampedCursorX = cursorXState.floatValue.coerceIn(0f, screenWidth.toFloat())
+        val clampedCursorY = cursorYState.floatValue.coerceIn(0f, screenHeight.toFloat())
+        cursorXState.floatValue = clampedCursorX
+        cursorYState.floatValue = clampedCursorY
+
+        val cursorDensity = resources.displayMetrics.density
+        val cursorHalfSizePx = (24 * cursorDensity).toInt()
+        cursorParams?.let { params ->
+            params.x = (clampedCursorX - cursorHalfSizePx).toInt()
+            params.y = (clampedCursorY - cursorHalfSizePx).toInt()
+            try {
+                if (cursorView != null && cursorView?.isAttachedToWindow == true) {
+                    windowManager.updateViewLayout(cursorView, params)
+                }
+            } catch (t: Throwable) {
+                Log.e(TAG, "Gagal mengupdate layout kursor saat rotasi: ${t.message}")
+            }
+        }
+
+        // Clamp ulang posisi panel agar tetap masuk dalam batas layar
+        clampAndUpdatePanelLayout()
+    }
+
     private fun readScreenDimensions() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             val windowMetrics = windowManager.currentWindowMetrics
@@ -132,6 +164,7 @@ class OverlayService : Service() {
             screenWidth = metrics.widthPixels
             screenHeight = metrics.heightPixels
         }
+        Log.d(TAG, "readScreenDimensions: screenWidth=$screenWidth, screenHeight=$screenHeight")
     }
 
     private fun initCursorOverlay() {
@@ -198,6 +231,7 @@ class OverlayService : Service() {
                         holdDurationMs = holdDurationState.longValue,
                         isCollapsed = isCollapsedState.value,
                         isTapToPlaceActive = isTapModeState.value,
+                        heldButton = heldButtonState.intValue,
                         onHoldDurationChange = { newDuration ->
                             holdDurationState.longValue = newDuration
                             backendManager.setHoldDuration(newDuration)
@@ -237,6 +271,15 @@ class OverlayService : Service() {
                             )
                             if (!success) showToast("Gagal: backend belum siap")
                         },
+                        onToggleDragLeft = {
+                            toggleDrag(InputBackendManager.BUTTON_LEFT)
+                        },
+                        onToggleDragRight = {
+                            toggleDrag(InputBackendManager.BUTTON_RIGHT)
+                        },
+                        onEmergencyRelease = {
+                            emergencyRelease()
+                        },
                         onRelativeMove = { dx, dy ->
                             updateCursorPosition(
                                 cursorXState.floatValue + dx,
@@ -273,6 +316,36 @@ class OverlayService : Service() {
         }
     }
 
+    private fun toggleDrag(button: Int) {
+        val currentHeld = heldButtonState.intValue
+        if (currentHeld == button) {
+            // Melepas tombol yang sedang aktif
+            backendManager.release(cursorXState.floatValue, cursorYState.floatValue, button)
+            heldButtonState.intValue = 0
+            showToast("Seret dilepas")
+        } else {
+            // Jika ada tombol lain yang sedang tertahan, lepas dulu
+            if (currentHeld != 0) {
+                backendManager.release(cursorXState.floatValue, cursorYState.floatValue, currentHeld)
+            }
+            val success = backendManager.pressDown(cursorXState.floatValue, cursorYState.floatValue, button)
+            if (success) {
+                heldButtonState.intValue = button
+                val name = if (button == InputBackendManager.BUTTON_LEFT) "Kiri" else "Kanan"
+                showToast("Menahan tombol $name. Geser kursor untuk menyeret.")
+            } else {
+                heldButtonState.intValue = 0
+                showToast("Gagal: backend belum siap")
+            }
+        }
+    }
+
+    private fun emergencyRelease() {
+        backendManager.emergencyRelease(cursorXState.floatValue, cursorYState.floatValue)
+        heldButtonState.intValue = 0
+        showToast("Semua tombol dilepas")
+    }
+
     private fun updateCursorPosition(newX: Float, newY: Float) {
         val clampedX = newX.coerceIn(0f, screenWidth.toFloat())
         val clampedY = newY.coerceIn(0f, screenHeight.toFloat())
@@ -294,18 +367,51 @@ class OverlayService : Service() {
         }
 
         // Notify input move in background
-        backendManager.move(clampedX, clampedY)
+        val held = heldButtonState.intValue
+        if (held != 0) {
+            backendManager.moveHeld(clampedX, clampedY, held)
+        } else {
+            backendManager.move(clampedX, clampedY)
+        }
     }
 
-    private fun dragControlPanel(dx: Float, dy: Float) {
+    private fun clampAndUpdatePanelLayout() {
+        val density = resources.displayMetrics.density
+        val panelW = if (panelView != null && panelView!!.width > 0) panelView!!.width else (285 * density).toInt()
+        val panelH = if (panelView != null && panelView!!.height > 0) panelView!!.height else (380 * density).toInt()
+        val maxX = (screenWidth - panelW).coerceAtLeast(0)
+        val maxY = (screenHeight - panelH).coerceAtLeast(0)
+
         panelParams?.let { params ->
-            params.x = (params.x + dx.toInt()).coerceIn(0, screenWidth - 100)
-            params.y = (params.y + dy.toInt()).coerceIn(0, screenHeight - 100)
+            params.x = params.x.coerceIn(0, maxX)
+            params.y = params.y.coerceIn(0, maxY)
             try {
                 if (panelView != null && panelView?.isAttachedToWindow == true) {
                     windowManager.updateViewLayout(panelView, params)
                 }
-            } catch (_: Throwable) {}
+            } catch (t: Throwable) {
+                Log.e(TAG, "Error updating panel layout: ${t.message}")
+            }
+        }
+    }
+
+    private fun dragControlPanel(dx: Float, dy: Float) {
+        val density = resources.displayMetrics.density
+        val panelW = if (panelView != null && panelView!!.width > 0) panelView!!.width else (285 * density).toInt()
+        val panelH = if (panelView != null && panelView!!.height > 0) panelView!!.height else (380 * density).toInt()
+        val maxX = (screenWidth - panelW).coerceAtLeast(0)
+        val maxY = (screenHeight - panelH).coerceAtLeast(0)
+
+        panelParams?.let { params ->
+            params.x = (params.x + dx.toInt()).coerceIn(0, maxX)
+            params.y = (params.y + dy.toInt()).coerceIn(0, maxY)
+            try {
+                if (panelView != null && panelView?.isAttachedToWindow == true) {
+                    windowManager.updateViewLayout(panelView, params)
+                }
+            } catch (t: Throwable) {
+                Log.e(TAG, "Error updating panel layout on drag: ${t.message}")
+            }
         }
     }
 
@@ -364,6 +470,12 @@ class OverlayService : Service() {
     }
 
     private fun hideOverlayViews() {
+        // Otomatis lepas tombol tertahan saat disembunyikan agar tidak nyangkut
+        if (heldButtonState.intValue != 0) {
+            backendManager.emergencyRelease(cursorXState.floatValue, cursorYState.floatValue)
+            heldButtonState.intValue = 0
+        }
+
         isHiddenState.value = true
         cursorView?.visibility = View.GONE
         panelView?.visibility = View.GONE
@@ -373,6 +485,9 @@ class OverlayService : Service() {
     }
 
     private fun showOverlayViews() {
+        readScreenDimensions()
+        clampAndUpdatePanelLayout()
+
         isHiddenState.value = false
         cursorView?.visibility = View.VISIBLE
         panelView?.visibility = View.VISIBLE
@@ -465,6 +580,12 @@ class OverlayService : Service() {
 
     override fun onDestroy() {
         isRunning = false
+        // Otomatis lepas tombol tertahan saat service dihentikan
+        if (heldButtonState.intValue != 0) {
+            backendManager.emergencyRelease(cursorXState.floatValue, cursorYState.floatValue)
+            heldButtonState.intValue = 0
+        }
+
         disableTapToPlace()
 
         cursorView?.let {

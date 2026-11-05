@@ -1,7 +1,9 @@
 package com.example.ui.overlay
 
+import android.view.MotionEvent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -34,6 +36,7 @@ import androidx.compose.material.icons.filled.RadioButtonChecked
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.TouchApp
 import androidx.compose.material.icons.filled.UnfoldLess
+import androidx.compose.material.icons.filled.PanTool
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -65,6 +68,7 @@ import androidx.compose.ui.unit.sp
 import com.example.backend.BackendState
 import com.example.backend.BackendStatus
 import com.example.backend.BackendType
+import com.example.backend.InputBackendManager
 import com.example.ui.theme.AccentPurple
 import com.example.ui.theme.DarkBg
 import com.example.ui.theme.DarkCardBorder
@@ -87,12 +91,16 @@ fun ControlPanel(
     holdDurationMs: Long,
     isCollapsed: Boolean,
     isTapToPlaceActive: Boolean,
+    heldButton: Int = 0,
     onHoldDurationChange: (Long) -> Unit,
     onSwitchBackend: (BackendType) -> Unit,
     onRequestPermission: () -> Unit,
     onClickLeft: () -> Unit,
     onClickRight: () -> Unit,
     onHoldRight: () -> Unit,
+    onToggleDragLeft: () -> Unit,
+    onToggleDragRight: () -> Unit,
+    onEmergencyRelease: () -> Unit,
     onRelativeMove: (dx: Float, dy: Float) -> Unit,
     onCenterCursor: () -> Unit,
     onToggleTapToPlace: () -> Unit,
@@ -104,6 +112,7 @@ fun ControlPanel(
     if (isCollapsed) {
         CollapsedBubble(
             backendState = backendState,
+            heldButton = heldButton,
             onClick = onToggleCollapsed,
             onLongClick = onClickRight,
             onDrag = onDragPanel
@@ -115,12 +124,16 @@ fun ControlPanel(
             cursorY = cursorY,
             holdDurationMs = holdDurationMs,
             isTapToPlaceActive = isTapToPlaceActive,
+            heldButton = heldButton,
             onHoldDurationChange = onHoldDurationChange,
             onSwitchBackend = onSwitchBackend,
             onRequestPermission = onRequestPermission,
             onClickLeft = onClickLeft,
             onClickRight = onClickRight,
             onHoldRight = onHoldRight,
+            onToggleDragLeft = onToggleDragLeft,
+            onToggleDragRight = onToggleDragRight,
+            onEmergencyRelease = onEmergencyRelease,
             onRelativeMove = onRelativeMove,
             onCenterCursor = onCenterCursor,
             onToggleTapToPlace = onToggleTapToPlace,
@@ -135,14 +148,22 @@ fun ControlPanel(
 @Composable
 fun CollapsedBubble(
     backendState: BackendState,
+    heldButton: Int = 0,
     onClick: () -> Unit,
     onLongClick: () -> Unit,
     onDrag: (dx: Float, dy: Float) -> Unit
 ) {
-    val statusColor = when (backendState.status) {
-        BackendStatus.READY -> StatusGreen
-        BackendStatus.CONNECTING, BackendStatus.PERMISSION_REQUIRED -> StatusYellow
+    val statusColor = when {
+        heldButton != 0 -> StatusRed
+        backendState.status == BackendStatus.READY -> StatusGreen
+        backendState.status == BackendStatus.CONNECTING || backendState.status == BackendStatus.PERMISSION_REQUIRED -> StatusYellow
         else -> StatusRed
+    }
+
+    val borderColor = when {
+        heldButton == MotionEvent.BUTTON_PRIMARY -> NeonCyan
+        heldButton == MotionEvent.BUTTON_SECONDARY -> AccentPurple
+        else -> NeonCyan.copy(alpha = 0.8f)
     }
 
     Box(
@@ -151,7 +172,7 @@ fun CollapsedBubble(
             .shadow(12.dp, CircleShape)
             .clip(CircleShape)
             .background(DarkSurface)
-            .border(2.dp, NeonCyan.copy(alpha = 0.8f), CircleShape)
+            .border(2.dp, borderColor, CircleShape)
             .pointerInput(Unit) {
                 detectDragGestures { change, dragAmount ->
                     change.consume()
@@ -168,9 +189,9 @@ fun CollapsedBubble(
         contentAlignment = Alignment.Center
     ) {
         Icon(
-            imageVector = Icons.Default.Mouse,
+            imageVector = if (heldButton != 0) Icons.Default.PanTool else Icons.Default.Mouse,
             contentDescription = "Buka Panel",
-            tint = NeonCyan,
+            tint = if (heldButton != 0) borderColor else NeonCyan,
             modifier = Modifier.size(28.dp)
         )
 
@@ -193,12 +214,16 @@ fun ExpandedPanel(
     cursorY: Float,
     holdDurationMs: Long,
     isTapToPlaceActive: Boolean,
+    heldButton: Int = 0,
     onHoldDurationChange: (Long) -> Unit,
     onSwitchBackend: (BackendType) -> Unit,
     onRequestPermission: () -> Unit,
     onClickLeft: () -> Unit,
     onClickRight: () -> Unit,
     onHoldRight: () -> Unit,
+    onToggleDragLeft: () -> Unit,
+    onToggleDragRight: () -> Unit,
+    onEmergencyRelease: () -> Unit,
     onRelativeMove: (dx: Float, dy: Float) -> Unit,
     onCenterCursor: () -> Unit,
     onToggleTapToPlace: () -> Unit,
@@ -395,12 +420,115 @@ fun ExpandedPanel(
                 }
             }
 
-            // Tombol Klik Kanan Tahan
+            // Fitur Seret (Tahan Tombol Mouse Sambil Geser Kursor)
+            val isDragLeft = heldButton == MotionEvent.BUTTON_PRIMARY
+            val isDragRight = heldButton == MotionEvent.BUTTON_SECONDARY
+
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(DarkSurfaceVariant, RoundedCornerShape(10.dp))
+                    .padding(8.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "SERET (TAHAN MOUSE)",
+                        fontSize = 9.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = TextTertiary,
+                        letterSpacing = 0.5.sp
+                    )
+                    if (heldButton != 0) {
+                        Text(
+                            text = if (isDragLeft) "Menahan: Kiri" else "Menahan: Kanan",
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = if (isDragLeft) NeonCyan else AccentPurple
+                        )
+                    }
+                }
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    // Toggle Seret Kiri
+                    Button(
+                        onClick = onToggleDragLeft,
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(36.dp)
+                            .testTag("btn_drag_left"),
+                        shape = RoundedCornerShape(8.dp),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = if (isDragLeft) NeonCyan else DarkBg,
+                            contentColor = if (isDragLeft) Color.Black else TextPrimary
+                        ),
+                        border = if (isDragLeft) null else BorderStroke(1.dp, DarkCardBorder)
+                    ) {
+                        Text(
+                            text = if (isDragLeft) "✓ Tahan Kiri" else "Seret Kiri",
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+
+                    // Toggle Seret Kanan
+                    Button(
+                        onClick = onToggleDragRight,
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(36.dp)
+                            .testTag("btn_drag_right"),
+                        shape = RoundedCornerShape(8.dp),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = if (isDragRight) AccentPurple else DarkBg,
+                            contentColor = if (isDragRight) Color.White else TextPrimary
+                        ),
+                        border = if (isDragRight) null else BorderStroke(1.dp, DarkCardBorder)
+                    ) {
+                        Text(
+                            text = if (isDragRight) "✓ Tahan Kanan" else "Seret Kanan",
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+
+                    // Tombol Darurat "Lepas"
+                    Button(
+                        onClick = onEmergencyRelease,
+                        modifier = Modifier
+                            .height(36.dp)
+                            .testTag("btn_emergency_release"),
+                        shape = RoundedCornerShape(8.dp),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = if (heldButton != 0) StatusRed else DarkBg,
+                            contentColor = if (heldButton != 0) Color.White else TextTertiary
+                        ),
+                        border = if (heldButton != 0) null else BorderStroke(1.dp, DarkCardBorder),
+                        enabled = heldButton != 0
+                    ) {
+                        Text(
+                            text = "Lepas",
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                }
+            }
+
+            // Tombol Klik Kanan Tahan (Timer Otomatis)
             Button(
                 onClick = onHoldRight,
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(42.dp)
+                    .height(40.dp)
                     .testTag("btn_hold_right"),
                 shape = RoundedCornerShape(12.dp),
                 colors = ButtonDefaults.buttonColors(
@@ -417,7 +545,7 @@ fun ExpandedPanel(
                 Text(
                     text = "Klik Kanan Tahan (${holdDurationMs} ms)",
                     fontWeight = FontWeight.Bold,
-                    fontSize = 12.sp
+                    fontSize = 11.sp
                 )
             }
 
