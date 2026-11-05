@@ -45,6 +45,7 @@ import androidx.compose.material.icons.filled.Layers
 import androidx.compose.material.icons.filled.Mouse
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.Warning
@@ -137,6 +138,7 @@ fun MainScreen() {
                 hasOverlayPermission = checkOverlayPermission(context)
                 hasNotificationPermission = checkNotificationPermission(context)
                 isServiceRunning = OverlayService.isRunning
+                backendManager.recheckStatus()
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
@@ -267,6 +269,9 @@ fun MainScreen() {
                         } else {
                             backendManager.reconnect()
                         }
+                    },
+                    onRecheck = {
+                        backendManager.recheckStatus()
                     }
                 )
             }
@@ -462,7 +467,8 @@ fun StepCard(
 fun BackendCard(
     backendState: BackendState,
     onSwitchBackend: (BackendType) -> Unit,
-    onRequestPermission: () -> Unit
+    onRequestPermission: () -> Unit,
+    onRecheck: () -> Unit
 ) {
     val statusColor = when (backendState.status) {
         BackendStatus.READY -> StatusGreen
@@ -562,20 +568,39 @@ fun BackendCard(
                     modifier = Modifier.weight(1f)
                 )
 
-                if (backendState.status == BackendStatus.PERMISSION_REQUIRED ||
-                    backendState.status == BackendStatus.NOT_RUNNING
-                ) {
-                    Button(
-                        onClick = onRequestPermission,
-                        modifier = Modifier.height(32.dp).testTag("backend_action_btn"),
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    if (backendState.status == BackendStatus.PERMISSION_REQUIRED) {
+                        Button(
+                            onClick = onRequestPermission,
+                            modifier = Modifier.height(32.dp).testTag("backend_action_btn"),
+                            shape = RoundedCornerShape(8.dp),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = NeonCyan,
+                                contentColor = Color.Black
+                            )
+                        ) {
+                            Text(
+                                text = "Minta Izin",
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                    }
+
+                    OutlinedButton(
+                        onClick = onRecheck,
+                        modifier = Modifier.height(32.dp).testTag("backend_recheck_btn"),
                         shape = RoundedCornerShape(8.dp),
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = NeonCyan,
-                            contentColor = Color.Black
-                        )
+                        colors = ButtonDefaults.outlinedButtonColors(contentColor = NeonCyan)
                     ) {
+                        Icon(
+                            imageVector = Icons.Default.Refresh,
+                            contentDescription = "Cek Ulang",
+                            modifier = Modifier.size(14.dp)
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
                         Text(
-                            text = if (backendState.type == BackendType.SHIZUKU) "Minta Izin" else "Coba Lagi",
+                            text = "Cek Ulang",
                             fontSize = 11.sp,
                             fontWeight = FontWeight.Bold
                         )

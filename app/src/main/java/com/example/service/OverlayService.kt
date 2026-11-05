@@ -257,6 +257,9 @@ class OverlayService : Service() {
                         },
                         onDragPanel = { dx, dy ->
                             dragControlPanel(dx, dy)
+                        },
+                        onRecheckBackend = {
+                            backendManager.recheckStatus()
                         }
                     )
                 }

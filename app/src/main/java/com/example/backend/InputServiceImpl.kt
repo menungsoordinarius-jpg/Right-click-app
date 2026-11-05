@@ -21,7 +21,7 @@ import java.lang.reflect.Method
 class InputServiceImpl : IInputService.Stub() {
 
     companion object {
-        private const val TAG = "RightClickDash-Input"
+        private const val TAG = "RCD"
         private const val INJECT_INPUT_EVENT_MODE_ASYNC = 0
 
         @Volatile

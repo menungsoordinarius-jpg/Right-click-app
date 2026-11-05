@@ -31,6 +31,7 @@ import androidx.compose.material.icons.filled.AdsClick
 import androidx.compose.material.icons.filled.Mouse
 import androidx.compose.material.icons.filled.MyLocation
 import androidx.compose.material.icons.filled.RadioButtonChecked
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.TouchApp
 import androidx.compose.material.icons.filled.UnfoldLess
 import androidx.compose.material3.Button
@@ -97,7 +98,8 @@ fun ControlPanel(
     onToggleTapToPlace: () -> Unit,
     onToggleCollapsed: () -> Unit,
     onCloseService: () -> Unit,
-    onDragPanel: (dx: Float, dy: Float) -> Unit
+    onDragPanel: (dx: Float, dy: Float) -> Unit,
+    onRecheckBackend: () -> Unit = {}
 ) {
     if (isCollapsed) {
         CollapsedBubble(
@@ -124,7 +126,8 @@ fun ControlPanel(
             onToggleTapToPlace = onToggleTapToPlace,
             onCollapse = onToggleCollapsed,
             onClose = onCloseService,
-            onDrag = onDragPanel
+            onDrag = onDragPanel,
+            onRecheckBackend = onRecheckBackend
         )
     }
 }
@@ -201,7 +204,8 @@ fun ExpandedPanel(
     onToggleTapToPlace: () -> Unit,
     onCollapse: () -> Unit,
     onClose: () -> Unit,
-    onDrag: (dx: Float, dy: Float) -> Unit
+    onDrag: (dx: Float, dy: Float) -> Unit,
+    onRecheckBackend: () -> Unit = {}
 ) {
     Card(
         modifier = Modifier
@@ -273,7 +277,8 @@ fun ExpandedPanel(
             BackendSelectorCard(
                 backendState = backendState,
                 onSwitchBackend = onSwitchBackend,
-                onRequestPermission = onRequestPermission
+                onRequestPermission = onRequestPermission,
+                onRecheckBackend = onRecheckBackend
             )
 
             // Coordinate Info & Quick Action
@@ -469,7 +474,8 @@ fun ExpandedPanel(
 fun BackendSelectorCard(
     backendState: BackendState,
     onSwitchBackend: (BackendType) -> Unit,
-    onRequestPermission: () -> Unit
+    onRequestPermission: () -> Unit,
+    onRecheckBackend: () -> Unit = {}
 ) {
     val statusColor = when (backendState.status) {
         BackendStatus.READY -> StatusGreen
@@ -538,18 +544,11 @@ fun BackendSelectorCard(
 
         Spacer(modifier = Modifier.height(6.dp))
 
-        // Status row
+        // Status row with recheck and action
         Row(
             modifier = Modifier
                 .fillMaxWidth()
                 .clip(RoundedCornerShape(6.dp))
-                .clickable {
-                    if (backendState.status == BackendStatus.PERMISSION_REQUIRED ||
-                        backendState.status == BackendStatus.NOT_RUNNING
-                    ) {
-                        onRequestPermission()
-                    }
-                }
                 .padding(vertical = 2.dp, horizontal = 4.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
@@ -567,6 +566,32 @@ fun BackendSelectorCard(
                 maxLines = 1,
                 modifier = Modifier.weight(1f)
             )
+
+            if (backendState.status == BackendStatus.PERMISSION_REQUIRED) {
+                Text(
+                    text = "Minta Izin",
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = NeonCyan,
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(4.dp))
+                        .clickable { onRequestPermission() }
+                        .padding(horizontal = 4.dp, vertical = 2.dp)
+                )
+                Spacer(modifier = Modifier.width(4.dp))
+            }
+
+            IconButton(
+                onClick = onRecheckBackend,
+                modifier = Modifier.size(24.dp).testTag("panel_recheck_btn")
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Refresh,
+                    contentDescription = "Cek Ulang",
+                    tint = TextSecondary,
+                    modifier = Modifier.size(14.dp)
+                )
+            }
         }
     }
 }
