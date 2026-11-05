@@ -86,6 +86,10 @@ class InputBackendManager private constructor(private val appContext: Context) {
     @Volatile
     private var inputService: IInputService? = null
 
+    @Volatile
+    var activeDragButton: Int = 0
+        private set
+
     private var shizukuListenerRegistered = false
 
     // 1. Shizuku Listeners
@@ -117,6 +121,9 @@ class InputBackendManager private constructor(private val appContext: Context) {
 
     private val shizukuBinderDeadListener = Shizuku.OnBinderDeadListener {
         Log.w(TAG, "OnBinderDeadListener terpanggil! Layanan Shizuku mati/berhenti.")
+        if (activeDragButton != 0) {
+            activeDragButton = 0
+        }
         inputService = null
         if (backendState.value.type == BackendType.SHIZUKU) {
             _backendState.value = BackendState(
@@ -155,6 +162,9 @@ class InputBackendManager private constructor(private val appContext: Context) {
 
         override fun onServiceDisconnected(name: ComponentName?) {
             Log.w(TAG, "shizukuConnection.onServiceDisconnected: $name")
+            if (activeDragButton != 0) {
+                activeDragButton = 0
+            }
             inputService = null
             if (backendState.value.type == BackendType.SHIZUKU) {
                 checkShizukuStatusAndConnect()
@@ -189,6 +199,9 @@ class InputBackendManager private constructor(private val appContext: Context) {
 
         override fun onServiceDisconnected(name: ComponentName?) {
             Log.w(TAG, "rootConnection.onServiceDisconnected: $name")
+            if (activeDragButton != 0) {
+                activeDragButton = 0
+            }
             inputService = null
             if (backendState.value.type == BackendType.ROOT) {
                 connectRoot()
@@ -289,6 +302,9 @@ class InputBackendManager private constructor(private val appContext: Context) {
 
     private fun disconnectCurrent() {
         checkJob?.cancel()
+        if (activeDragButton != 0) {
+            emergencyRelease(0f, 0f)
+        }
         inputService = null
 
         try {
@@ -560,7 +576,70 @@ class InputBackendManager private constructor(private val appContext: Context) {
         }
     }
 
+    fun pressDown(x: Float, y: Float, button: Int): Boolean {
+        activeDragButton = button
+        val service = inputService
+        return if (service != null) {
+            try {
+                Log.d(TAG, "pressDown($x, $y, button=$button) dikirim ke InputService")
+                service.pressDown(x, y, button)
+                true
+            } catch (t: Throwable) {
+                Log.e(TAG, "IPC pressDown error: ${t.message}", t)
+                false
+            }
+        } else {
+            Log.w(TAG, "InputService belum terhubung saat pressDown($x, $y, $button)")
+            false
+        }
+    }
+
+    fun moveHeld(x: Float, y: Float, button: Int = activeDragButton): Boolean {
+        val targetButton = if (button != 0) button else activeDragButton
+        val service = inputService
+        return if (service != null) {
+            try {
+                service.moveHeld(x, y, targetButton)
+                true
+            } catch (t: Throwable) {
+                Log.e(TAG, "IPC moveHeld error: ${t.message}", t)
+                false
+            }
+        } else {
+            false
+        }
+    }
+
+    fun release(x: Float, y: Float, button: Int = activeDragButton): Boolean {
+        val targetButton = if (button != 0) button else activeDragButton
+        activeDragButton = 0
+        val service = inputService
+        return if (service != null) {
+            try {
+                Log.d(TAG, "release($x, $y, button=$targetButton) dikirim ke InputService")
+                service.release(x, y, targetButton)
+                true
+            } catch (t: Throwable) {
+                Log.e(TAG, "IPC release error: ${t.message}", t)
+                false
+            }
+        } else {
+            Log.w(TAG, "InputService belum terhubung saat release($x, $y, $targetButton)")
+            false
+        }
+    }
+
+    fun emergencyRelease(x: Float = 0f, y: Float = 0f): Boolean {
+        val btn = activeDragButton
+        Log.i(TAG, "emergencyRelease dipanggil (held button was $btn)")
+        val targetBtn = if (btn != 0) btn else BUTTON_LEFT
+        return release(x, y, targetBtn)
+    }
+
     fun move(x: Float, y: Float): Boolean {
+        if (activeDragButton != 0) {
+            return moveHeld(x, y, activeDragButton)
+        }
         val service = inputService
         return if (service != null) {
             try {
