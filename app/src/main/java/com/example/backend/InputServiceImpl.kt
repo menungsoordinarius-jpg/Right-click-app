@@ -132,6 +132,12 @@ class InputServiceImpl : IInputService.Stub() {
         }
     }
 
+    override fun scroll(x: Float, y: Float, notches: Int) {
+        handler.post {
+            executeScroll(x, y, notches)
+        }
+    }
+
     private fun executeClick(x: Float, y: Float, button: Int) {
         val now = SystemClock.uptimeMillis()
 
@@ -269,6 +275,61 @@ class InputServiceImpl : IInputService.Stub() {
             Log.i(TAG, "release sukses: tombol $btn dilepas, total moveHeld=$moveHeldCounter")
         } catch (t: Throwable) {
             Log.e(TAG, "release error: ${t.message}", t)
+        }
+    }
+
+    private fun executeScroll(x: Float, y: Float, notches: Int) {
+        try {
+            Log.d(TAG, "scroll: koordinat ($x, $y), notches=$notches")
+            val now = SystemClock.uptimeMillis()
+            val downTime = if (activeDragDownTime != 0L) activeDragDownTime else now
+            val buttonState = if (activeDragButton != 0) activeDragButton else 0
+
+            val properties = arrayOf(
+                MotionEvent.PointerProperties().apply {
+                    id = 0
+                    toolType = MotionEvent.TOOL_TYPE_MOUSE
+                }
+            )
+
+            val coords = arrayOf(
+                MotionEvent.PointerCoords().apply {
+                    this.x = x
+                    this.y = y
+                    this.pressure = 0f
+                    this.size = 1f
+                    setAxisValue(MotionEvent.AXIS_VSCROLL, -notches.toFloat())
+                }
+            )
+
+            val event = MotionEvent.obtain(
+                downTime,
+                now,
+                MotionEvent.ACTION_SCROLL,
+                1,
+                properties,
+                coords,
+                0,
+                buttonState,
+                1f,
+                1f,
+                0,
+                0,
+                InputDevice.SOURCE_MOUSE,
+                0
+            )
+
+            try {
+                if (setDisplayIdMethod != null) {
+                    setDisplayIdMethod?.invoke(event, 0)
+                } else {
+                    HiddenApiBypass.invoke(MotionEvent::class.java, event, "setDisplayId", 0)
+                }
+            } catch (_: Throwable) {}
+
+            injectEvent(event)
+        } catch (t: Throwable) {
+            Log.e(TAG, "scroll error: ${t.message}", t)
         }
     }
 

@@ -1,14 +1,16 @@
 package com.example.ui.overlay
 
 import android.view.MotionEvent
-import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.foundation.BorderStroke
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGestures
-import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -17,827 +19,794 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.DragHandle
-import androidx.compose.material.icons.filled.KeyboardArrowDown
-import androidx.compose.material.icons.filled.KeyboardArrowLeft
-import androidx.compose.material.icons.filled.KeyboardArrowRight
-import androidx.compose.material.icons.filled.KeyboardArrowUp
-import androidx.compose.material.icons.filled.AdsClick
-import androidx.compose.material.icons.filled.Mouse
-import androidx.compose.material.icons.filled.MyLocation
-import androidx.compose.material.icons.filled.RadioButtonChecked
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material.icons.filled.TouchApp
-import androidx.compose.material.icons.filled.UnfoldLess
-import androidx.compose.material.icons.filled.PanTool
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Slider
-import androidx.compose.material3.SliderDefaults
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.draw.rotate
+import androidx.compose.ui.draw.scale
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.backend.BackendState
 import com.example.backend.BackendStatus
 import com.example.backend.BackendType
 import com.example.backend.InputBackendManager
-import com.example.ui.theme.AccentPurple
-import com.example.ui.theme.DarkBg
-import com.example.ui.theme.DarkCardBorder
-import com.example.ui.theme.DarkSurface
-import com.example.ui.theme.DarkSurfaceVariant
-import com.example.ui.theme.ElectricBlue
-import com.example.ui.theme.NeonCyan
-import com.example.ui.theme.StatusGreen
-import com.example.ui.theme.StatusRed
-import com.example.ui.theme.StatusYellow
-import com.example.ui.theme.TextPrimary
-import com.example.ui.theme.TextSecondary
-import com.example.ui.theme.TextTertiary
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import kotlin.math.hypot
 
+// =========================================================================
+// KONSTANTA DIMENSI & GAIN (Sesuai Desain HTML Virtual Touch Pad)
+// =========================================================================
+val PANEL_MAX_WIDTH = 340.dp
+val PANEL_CORNER_RADIUS = 20.dp
+val PANEL_PADDING = 15.dp
+
+val CONTROL_BTN_HEIGHT = 80.dp
+val CONTROL_BTN_RADIUS = 16.dp
+val CONTROL_BTN_GAP = 15.dp
+
+val TOUCHPAD_HEIGHT = 180.dp
+val TOUCHPAD_RADIUS = 18.dp
+
+val SCROLL_STRIP_WIDTH = 20.dp
+val SCROLL_STRIP_RADIUS = 7.dp
+val SCROLL_TICK_INTERVAL_DP = 16f
+val SCROLL_STEP_PX = 24f
+const val SCROLL_NATURAL = true
+
+val DRAG_HANDLE_WIDTH = 120.dp
+val DRAG_HANDLE_HEIGHT = 6.dp
+val DRAG_HANDLE_TOP_MARGIN = 18.dp
+val DRAG_HANDLE_TOUCH_HEIGHT = 32.dp
+
+// Touchpad Gain Constants
+const val BASE_GAIN = 0.8f
+const val ACCEL = 2.5f
+const val MAX_GAIN = 8.0f
+const val HOLD_TIME_MS = 600L
+
+// Warna dari HTML
+val ColorBgDark = Color(0xEF14161C) // #14161C 94%
+val ColorWhiteLayer = Color(0x0CFFFFFF) // 4.5% white overlay
+val ColorBorderWhite = Color(0x18FFFFFF) // #ffffff18
+val ColorActiveBorder = Color(0x7738E6A2) // #38e6a277
+val ColorActiveGreen = Color(0xFF39EFA1) // #39efa1
+val ColorStatusGreen = Color(0xFF36D995) // #36d995
+val ColorDotInactive = Color(0xFF555B66) // #555b66
+val ColorTextSystem = Color(0xFF8D929E) // #8d929e
+val ColorTextTouchpad = Color(0xFFA4ACB9) // #a4acb9
+val ColorTextSub = Color(0xFF666E7C) // #666e7c
+val ColorHandle = Color(0x44FFFFFF) // #ffffff44
+
+/**
+ * Komponen utama panel kontrol RightClickDash (Virtual Touch Pad).
+ */
 @Composable
 fun ControlPanel(
     backendState: BackendState,
     cursorX: Float,
     cursorY: Float,
-    holdDurationMs: Long,
-    isCollapsed: Boolean,
-    isTapToPlaceActive: Boolean,
     heldButton: Int = 0,
-    onHoldDurationChange: (Long) -> Unit,
     onSwitchBackend: (BackendType) -> Unit,
     onRequestPermission: () -> Unit,
+    onRecheckBackend: () -> Unit,
     onClickLeft: () -> Unit,
     onClickRight: () -> Unit,
-    onHoldRight: () -> Unit,
-    onToggleDragLeft: () -> Unit,
-    onToggleDragRight: () -> Unit,
-    onEmergencyRelease: () -> Unit,
+    onLockLeft: () -> Unit,
+    onLockRight: () -> Unit,
+    onUnlock: () -> Unit,
     onRelativeMove: (dx: Float, dy: Float) -> Unit,
-    onCenterCursor: () -> Unit,
-    onToggleTapToPlace: () -> Unit,
-    onToggleCollapsed: () -> Unit,
-    onCloseService: () -> Unit,
-    onDragPanel: (dx: Float, dy: Float) -> Unit,
-    onRecheckBackend: () -> Unit = {}
+    onScroll: (notches: Int) -> Unit,
+    onDragPanel: (dx: Float, dy: Float) -> Unit
 ) {
-    if (isCollapsed) {
-        CollapsedBubble(
-            backendState = backendState,
-            heldButton = heldButton,
-            onClick = onToggleCollapsed,
-            onLongClick = onClickRight,
-            onDrag = onDragPanel
-        )
-    } else {
-        ExpandedPanel(
-            backendState = backendState,
-            cursorX = cursorX,
-            cursorY = cursorY,
-            holdDurationMs = holdDurationMs,
-            isTapToPlaceActive = isTapToPlaceActive,
-            heldButton = heldButton,
-            onHoldDurationChange = onHoldDurationChange,
-            onSwitchBackend = onSwitchBackend,
-            onRequestPermission = onRequestPermission,
-            onClickLeft = onClickLeft,
-            onClickRight = onClickRight,
-            onHoldRight = onHoldRight,
-            onToggleDragLeft = onToggleDragLeft,
-            onToggleDragRight = onToggleDragRight,
-            onEmergencyRelease = onEmergencyRelease,
-            onRelativeMove = onRelativeMove,
-            onCenterCursor = onCenterCursor,
-            onToggleTapToPlace = onToggleTapToPlace,
-            onCollapse = onToggleCollapsed,
-            onClose = onCloseService,
-            onDrag = onDragPanel,
-            onRecheckBackend = onRecheckBackend
-        )
-    }
-}
-
-@Composable
-fun CollapsedBubble(
-    backendState: BackendState,
-    heldButton: Int = 0,
-    onClick: () -> Unit,
-    onLongClick: () -> Unit,
-    onDrag: (dx: Float, dy: Float) -> Unit
-) {
-    val statusColor = when {
-        heldButton != 0 -> StatusRed
-        backendState.status == BackendStatus.READY -> StatusGreen
-        backendState.status == BackendStatus.CONNECTING || backendState.status == BackendStatus.PERMISSION_REQUIRED -> StatusYellow
-        else -> StatusRed
-    }
-
-    val borderColor = when {
-        heldButton == MotionEvent.BUTTON_PRIMARY -> NeonCyan
-        heldButton == MotionEvent.BUTTON_SECONDARY -> AccentPurple
-        else -> NeonCyan.copy(alpha = 0.8f)
-    }
-
     Box(
         modifier = Modifier
-            .size(60.dp)
-            .shadow(12.dp, CircleShape)
-            .clip(CircleShape)
-            .background(DarkSurface)
-            .border(2.dp, borderColor, CircleShape)
-            .pointerInput(Unit) {
-                detectDragGestures { change, dragAmount ->
-                    change.consume()
-                    onDrag(dragAmount.x, dragAmount.y)
-                }
-            }
-            .pointerInput(Unit) {
-                detectTapGestures(
-                    onTap = { onClick() },
-                    onLongPress = { onLongClick() }
-                )
-            }
-            .testTag("bubble_toggle"),
-        contentAlignment = Alignment.Center
-    ) {
-        Icon(
-            imageVector = if (heldButton != 0) Icons.Default.PanTool else Icons.Default.Mouse,
-            contentDescription = "Buka Panel",
-            tint = if (heldButton != 0) borderColor else NeonCyan,
-            modifier = Modifier.size(28.dp)
-        )
-
-        // Status indicator dot
-        Box(
-            modifier = Modifier
-                .align(Alignment.TopEnd)
-                .padding(6.dp)
-                .size(10.dp)
-                .background(statusColor, CircleShape)
-                .border(1.5.dp, DarkSurface, CircleShape)
-        )
-    }
-}
-
-@Composable
-fun ExpandedPanel(
-    backendState: BackendState,
-    cursorX: Float,
-    cursorY: Float,
-    holdDurationMs: Long,
-    isTapToPlaceActive: Boolean,
-    heldButton: Int = 0,
-    onHoldDurationChange: (Long) -> Unit,
-    onSwitchBackend: (BackendType) -> Unit,
-    onRequestPermission: () -> Unit,
-    onClickLeft: () -> Unit,
-    onClickRight: () -> Unit,
-    onHoldRight: () -> Unit,
-    onToggleDragLeft: () -> Unit,
-    onToggleDragRight: () -> Unit,
-    onEmergencyRelease: () -> Unit,
-    onRelativeMove: (dx: Float, dy: Float) -> Unit,
-    onCenterCursor: () -> Unit,
-    onToggleTapToPlace: () -> Unit,
-    onCollapse: () -> Unit,
-    onClose: () -> Unit,
-    onDrag: (dx: Float, dy: Float) -> Unit,
-    onRecheckBackend: () -> Unit = {}
-) {
-    Card(
-        modifier = Modifier
-            .width(285.dp)
-            .shadow(16.dp, RoundedCornerShape(20.dp))
-            .border(1.dp, DarkCardBorder, RoundedCornerShape(20.dp))
-            .testTag("control_panel_card"),
-        shape = RoundedCornerShape(20.dp),
-        colors = CardDefaults.cardColors(containerColor = DarkSurface)
+            .fillMaxWidth()
+            .shadow(
+                elevation = 24.dp,
+                shape = RoundedCornerShape(PANEL_CORNER_RADIUS),
+                ambientColor = Color.Black,
+                spotColor = Color.Black
+            )
+            .clip(RoundedCornerShape(PANEL_CORNER_RADIUS))
+            .background(ColorBgDark)
+            .background(ColorWhiteLayer)
+            .border(1.dp, ColorBorderWhite, RoundedCornerShape(PANEL_CORNER_RADIUS))
+            .padding(PANEL_PADDING)
+            .testTag("virtual_touch_pad")
     ) {
         Column(
-            modifier = Modifier.padding(12.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp)
+            modifier = Modifier.fillMaxWidth()
         ) {
-            // Header Bar (Draggable)
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(8.dp))
-                    .background(DarkSurfaceVariant.copy(alpha = 0.6f))
-                    .pointerInput(Unit) {
-                        detectDragGestures { change, dragAmount ->
-                            change.consume()
-                            onDrag(dragAmount.x, dragAmount.y)
-                        }
-                    }
-                    .padding(horizontal = 8.dp, vertical = 4.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Icon(
-                    imageVector = Icons.Default.DragHandle,
-                    contentDescription = "Geser Panel",
-                    tint = TextTertiary,
-                    modifier = Modifier.size(18.dp)
-                )
-                Spacer(modifier = Modifier.width(6.dp))
-                Text(
-                    text = "RightClickDash",
-                    style = MaterialTheme.typography.titleSmall,
-                    fontWeight = FontWeight.Bold,
-                    color = NeonCyan,
-                    modifier = Modifier.weight(1f)
-                )
-                IconButton(
-                    onClick = onCollapse,
-                    modifier = Modifier.size(28.dp).testTag("collapse_button")
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.UnfoldLess,
-                        contentDescription = "Ciutkan",
-                        tint = TextSecondary,
-                        modifier = Modifier.size(16.dp)
-                    )
-                }
-                IconButton(
-                    onClick = onClose,
-                    modifier = Modifier.size(28.dp).testTag("close_service_button")
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.Close,
-                        contentDescription = "Tutup",
-                        tint = StatusRed,
-                        modifier = Modifier.size(16.dp)
-                    )
-                }
-            }
-
-            // Backend Selector & Status
-            BackendSelectorCard(
+            // 1. HEADER (Status dot + Teks + Menu dropdown)
+            HeaderSection(
                 backendState = backendState,
                 onSwitchBackend = onSwitchBackend,
                 onRequestPermission = onRequestPermission,
                 onRecheckBackend = onRecheckBackend
             )
 
-            // Coordinate Info & Quick Action
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .background(DarkSurfaceVariant, RoundedCornerShape(10.dp))
-                    .padding(horizontal = 10.dp, vertical = 6.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween
-            ) {
-                Column {
-                    Text(
-                        text = "POSISI KURSOR",
-                        fontSize = 9.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        color = TextTertiary,
-                        letterSpacing = 0.5.sp
-                    )
-                    Text(
-                        text = "X: ${cursorX.toInt()}  Y: ${cursorY.toInt()}",
-                        fontSize = 13.sp,
-                        fontFamily = FontFamily.Monospace,
-                        fontWeight = FontWeight.Bold,
-                        color = TextPrimary
-                    )
-                }
+            Spacer(modifier = Modifier.height(15.dp))
 
-                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                    IconButton(
-                        onClick = onCenterCursor,
-                        modifier = Modifier
-                            .size(32.dp)
-                            .background(DarkCardBorder, CircleShape)
-                            .testTag("center_cursor_btn")
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.MyLocation,
-                            contentDescription = "Tengah Layar",
-                            tint = NeonCyan,
-                            modifier = Modifier.size(16.dp)
-                        )
-                    }
+            // 2. TOMBOL BESAR: CLICK LEFT & CLICK RIGHT
+            ControlsSection(
+                heldButton = heldButton,
+                onClickLeft = onClickLeft,
+                onClickRight = onClickRight,
+                onLockLeft = onLockLeft,
+                onLockRight = onLockRight,
+                onUnlock = onUnlock
+            )
 
-                    IconButton(
-                        onClick = onToggleTapToPlace,
-                        modifier = Modifier
-                            .size(32.dp)
-                            .background(
-                                if (isTapToPlaceActive) NeonCyan else DarkCardBorder,
-                                CircleShape
-                            )
-                            .testTag("tap_mode_btn")
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.TouchApp,
-                            contentDescription = "Mode Tap",
-                            tint = if (isTapToPlaceActive) Color.Black else TextSecondary,
-                            modifier = Modifier.size(16.dp)
-                        )
-                    }
-                }
-            }
+            Spacer(modifier = Modifier.height(15.dp))
 
-            // Primary Mouse Action Buttons
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                // Klik Kiri
-                Button(
-                    onClick = onClickLeft,
-                    modifier = Modifier
-                        .weight(1f)
-                        .height(44.dp)
-                        .testTag("btn_click_left"),
-                    shape = RoundedCornerShape(12.dp),
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = DarkSurfaceVariant,
-                        contentColor = TextPrimary
-                    )
-                ) {
-                    Text(
-                        text = "Klik Kiri",
-                        fontWeight = FontWeight.SemiBold,
-                        fontSize = 12.sp
-                    )
-                }
+            // 3. TOUCHPAD RELATIF & 4. SCROLL STRIP
+            TouchRowSection(
+                onRelativeMove = onRelativeMove,
+                onScroll = onScroll
+            )
 
-                // Klik Kanan (Primary focus)
-                Button(
-                    onClick = onClickRight,
-                    modifier = Modifier
-                        .weight(1.3f)
-                        .height(44.dp)
-                        .testTag("btn_click_right"),
-                    shape = RoundedCornerShape(12.dp),
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = NeonCyan,
-                        contentColor = Color.Black
-                    )
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.AdsClick,
-                        contentDescription = null,
-                        modifier = Modifier.size(16.dp)
-                    )
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Text(
-                        text = "Klik Kanan",
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 12.sp
-                    )
-                }
-            }
-
-            // Fitur Seret (Tahan Tombol Mouse Sambil Geser Kursor)
-            val isDragLeft = heldButton == MotionEvent.BUTTON_PRIMARY
-            val isDragRight = heldButton == MotionEvent.BUTTON_SECONDARY
-
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .background(DarkSurfaceVariant, RoundedCornerShape(10.dp))
-                    .padding(8.dp),
-                verticalArrangement = Arrangement.spacedBy(6.dp)
-            ) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(
-                        text = "SERET (TAHAN MOUSE)",
-                        fontSize = 9.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = TextTertiary,
-                        letterSpacing = 0.5.sp
-                    )
-                    if (heldButton != 0) {
-                        Text(
-                            text = if (isDragLeft) "Menahan: Kiri" else "Menahan: Kanan",
-                            fontSize = 10.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = if (isDragLeft) NeonCyan else AccentPurple
-                        )
-                    }
-                }
-
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    // Toggle Seret Kiri
-                    Button(
-                        onClick = onToggleDragLeft,
-                        modifier = Modifier
-                            .weight(1f)
-                            .height(36.dp)
-                            .testTag("btn_drag_left"),
-                        shape = RoundedCornerShape(8.dp),
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = if (isDragLeft) NeonCyan else DarkBg,
-                            contentColor = if (isDragLeft) Color.Black else TextPrimary
-                        ),
-                        border = if (isDragLeft) null else BorderStroke(1.dp, DarkCardBorder)
-                    ) {
-                        Text(
-                            text = if (isDragLeft) "✓ Tahan Kiri" else "Seret Kiri",
-                            fontSize = 10.sp,
-                            fontWeight = FontWeight.Bold
-                        )
-                    }
-
-                    // Toggle Seret Kanan
-                    Button(
-                        onClick = onToggleDragRight,
-                        modifier = Modifier
-                            .weight(1f)
-                            .height(36.dp)
-                            .testTag("btn_drag_right"),
-                        shape = RoundedCornerShape(8.dp),
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = if (isDragRight) AccentPurple else DarkBg,
-                            contentColor = if (isDragRight) Color.White else TextPrimary
-                        ),
-                        border = if (isDragRight) null else BorderStroke(1.dp, DarkCardBorder)
-                    ) {
-                        Text(
-                            text = if (isDragRight) "✓ Tahan Kanan" else "Seret Kanan",
-                            fontSize = 10.sp,
-                            fontWeight = FontWeight.Bold
-                        )
-                    }
-
-                    // Tombol Darurat "Lepas"
-                    Button(
-                        onClick = onEmergencyRelease,
-                        modifier = Modifier
-                            .height(36.dp)
-                            .testTag("btn_emergency_release"),
-                        shape = RoundedCornerShape(8.dp),
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = if (heldButton != 0) StatusRed else DarkBg,
-                            contentColor = if (heldButton != 0) Color.White else TextTertiary
-                        ),
-                        border = if (heldButton != 0) null else BorderStroke(1.dp, DarkCardBorder),
-                        enabled = heldButton != 0
-                    ) {
-                        Text(
-                            text = "Lepas",
-                            fontSize = 10.sp,
-                            fontWeight = FontWeight.Bold
-                        )
-                    }
-                }
-            }
-
-            // Tombol Klik Kanan Tahan (Timer Otomatis)
-            Button(
-                onClick = onHoldRight,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(40.dp)
-                    .testTag("btn_hold_right"),
-                shape = RoundedCornerShape(12.dp),
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = AccentPurple,
-                    contentColor = Color.White
-                )
-            ) {
-                Icon(
-                    imageVector = Icons.Default.RadioButtonChecked,
-                    contentDescription = null,
-                    modifier = Modifier.size(15.dp)
-                )
-                Spacer(modifier = Modifier.width(6.dp))
-                Text(
-                    text = "Klik Kanan Tahan (${holdDurationMs} ms)",
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 11.sp
-                )
-            }
-
-            // Slider Durasi Tahan (300 ms - 3000 ms, default 800 ms)
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .background(DarkSurfaceVariant, RoundedCornerShape(10.dp))
-                    .padding(horizontal = 10.dp, vertical = 6.dp)
-            ) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(
-                        text = "Durasi Tahan",
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.Medium,
-                        color = TextSecondary
-                    )
-                    Text(
-                        text = "${holdDurationMs} ms",
-                        fontSize = 11.sp,
-                        fontFamily = FontFamily.Monospace,
-                        fontWeight = FontWeight.Bold,
-                        color = NeonCyan
-                    )
-                }
-
-                Slider(
-                    value = holdDurationMs.toFloat(),
-                    onValueChange = { onHoldDurationChange(it.toLong()) },
-                    valueRange = 300f..3000f,
-                    steps = 26,
-                    colors = SliderDefaults.colors(
-                        thumbColor = NeonCyan,
-                        activeTrackColor = NeonCyan,
-                        inactiveTrackColor = DarkCardBorder
-                    ),
-                    modifier = Modifier.height(28.dp).testTag("hold_slider")
-                )
-            }
-
-            // Mini Touchpad (Relative Drag Area) & Micro Nudge
-            TouchpadSection(
-                onRelativeMove = onRelativeMove
+            // 5. DRAG HANDLE BAWAH (untuk menggeser seluruh panel)
+            DragHandleBottom(
+                onDragPanel = onDragPanel
             )
         }
     }
 }
 
+/**
+ * Header: Titik status 7dp dengan glow + teks 10sp.
+ * Ketuk header untuk membuka menu pilihan backend & cek ulang.
+ */
 @Composable
-fun BackendSelectorCard(
+fun HeaderSection(
     backendState: BackendState,
     onSwitchBackend: (BackendType) -> Unit,
     onRequestPermission: () -> Unit,
-    onRecheckBackend: () -> Unit = {}
+    onRecheckBackend: () -> Unit
 ) {
-    val statusColor = when (backendState.status) {
-        BackendStatus.READY -> StatusGreen
-        BackendStatus.CONNECTING, BackendStatus.PERMISSION_REQUIRED -> StatusYellow
-        else -> StatusRed
+    var menuExpanded by remember { mutableStateOf(false) }
+
+    val dotColor = when (backendState.status) {
+        BackendStatus.READY -> ColorStatusGreen
+        BackendStatus.CONNECTING, BackendStatus.PERMISSION_REQUIRED -> Color(0xFFFFD54F) // Kuning
+        else -> Color(0xFFFF5252) // Merah
     }
 
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .background(DarkSurfaceVariant, RoundedCornerShape(12.dp))
-            .padding(8.dp)
+    val statusText = when {
+        backendState.status == BackendStatus.READY -> {
+            if (backendState.type == BackendType.SHIZUKU) "READY (shizuku is connect)"
+            else "READY (root is connect)"
+        }
+        backendState.status == BackendStatus.NOT_RUNNING -> "SHIZUKU BELUM BERJALAN"
+        backendState.status == BackendStatus.PERMISSION_REQUIRED -> "IZIN SHIZUKU BELUM DIBERIKAN"
+        backendState.status == BackendStatus.CONNECTING -> "MENGHUBUNGKAN..."
+        else -> "ERROR"
+    }
+
+    Box(
+        modifier = Modifier.fillMaxWidth()
     ) {
         Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(6.dp)
-        ) {
-            // Shizuku tab
-            val isShizuku = backendState.type == BackendType.SHIZUKU
-            Box(
-                modifier = Modifier
-                    .weight(1f)
-                    .clip(RoundedCornerShape(8.dp))
-                    .background(if (isShizuku) NeonCyan.copy(alpha = 0.2f) else DarkBg)
-                    .border(
-                        1.dp,
-                        if (isShizuku) NeonCyan else Color.Transparent,
-                        RoundedCornerShape(8.dp)
-                    )
-                    .clickable { onSwitchBackend(BackendType.SHIZUKU) }
-                    .padding(vertical = 6.dp),
-                contentAlignment = Alignment.Center
-            ) {
-                Text(
-                    text = "Shizuku",
-                    fontSize = 12.sp,
-                    fontWeight = if (isShizuku) FontWeight.Bold else FontWeight.Normal,
-                    color = if (isShizuku) NeonCyan else TextSecondary
-                )
-            }
-
-            // Root tab
-            val isRoot = backendState.type == BackendType.ROOT
-            Box(
-                modifier = Modifier
-                    .weight(1f)
-                    .clip(RoundedCornerShape(8.dp))
-                    .background(if (isRoot) NeonCyan.copy(alpha = 0.2f) else DarkBg)
-                    .border(
-                        1.dp,
-                        if (isRoot) NeonCyan else Color.Transparent,
-                        RoundedCornerShape(8.dp)
-                    )
-                    .clickable { onSwitchBackend(BackendType.ROOT) }
-                    .padding(vertical = 6.dp),
-                contentAlignment = Alignment.Center
-            ) {
-                Text(
-                    text = "Root",
-                    fontSize = 12.sp,
-                    fontWeight = if (isRoot) FontWeight.Bold else FontWeight.Normal,
-                    color = if (isRoot) NeonCyan else TextSecondary
-                )
-            }
-        }
-
-        Spacer(modifier = Modifier.height(6.dp))
-
-        // Status row with recheck and action
-        Row(
             modifier = Modifier
-                .fillMaxWidth()
                 .clip(RoundedCornerShape(6.dp))
-                .padding(vertical = 2.dp, horizontal = 4.dp),
+                .clickable { menuExpanded = true }
+                .padding(vertical = 4.dp, horizontal = 2.dp)
+                .testTag("header_status"),
             verticalAlignment = Alignment.CenterVertically
         ) {
+            // Titik 7dp dengan glow
             Box(
                 modifier = Modifier
-                    .size(8.dp)
-                    .background(statusColor, CircleShape)
+                    .size(7.dp)
+                    .drawBehind {
+                        // Glow shadow
+                        drawCircle(
+                            color = dotColor.copy(alpha = 0.5f),
+                            radius = 6.dp.toPx()
+                        )
+                        drawCircle(
+                            color = dotColor,
+                            radius = 3.5.dp.toPx()
+                        )
+                    }
             )
-            Spacer(modifier = Modifier.width(6.dp))
+
+            Spacer(modifier = Modifier.width(7.dp))
+
             Text(
-                text = backendState.message,
-                fontSize = 11.sp,
-                color = if (backendState.status == BackendStatus.READY) TextSecondary else statusColor,
+                text = statusText,
+                fontSize = 10.sp,
                 fontWeight = FontWeight.Medium,
-                maxLines = 1,
-                modifier = Modifier.weight(1f)
+                color = ColorTextSystem,
+                letterSpacing = 0.5.sp
+            )
+        }
+
+        // Dropdown Menu pemilihan backend & cek ulang
+        DropdownMenu(
+            expanded = menuExpanded,
+            onDismissRequest = { menuExpanded = false },
+            modifier = Modifier
+                .background(Color(0xFF1E212B))
+                .border(1.dp, ColorBorderWhite, RoundedCornerShape(8.dp))
+        ) {
+            DropdownMenuItem(
+                text = {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        if (backendState.type == BackendType.SHIZUKU) {
+                            Icon(Icons.Default.Check, contentDescription = null, tint = ColorActiveGreen, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(8.dp))
+                        }
+                        Text("Backend: Shizuku", color = Color.White, fontSize = 12.sp)
+                    }
+                },
+                onClick = {
+                    menuExpanded = false
+                    onSwitchBackend(BackendType.SHIZUKU)
+                }
+            )
+
+            DropdownMenuItem(
+                text = {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        if (backendState.type == BackendType.ROOT) {
+                            Icon(Icons.Default.Check, contentDescription = null, tint = ColorActiveGreen, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(8.dp))
+                        }
+                        Text("Backend: Root", color = Color.White, fontSize = 12.sp)
+                    }
+                },
+                onClick = {
+                    menuExpanded = false
+                    onSwitchBackend(BackendType.ROOT)
+                }
             )
 
             if (backendState.status == BackendStatus.PERMISSION_REQUIRED) {
-                Text(
-                    text = "Minta Izin",
-                    fontSize = 10.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = NeonCyan,
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(4.dp))
-                        .clickable { onRequestPermission() }
-                        .padding(horizontal = 4.dp, vertical = 2.dp)
+                DropdownMenuItem(
+                    text = {
+                        Text("Minta Izin Shizuku", color = ColorActiveGreen, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                    },
+                    onClick = {
+                        menuExpanded = false
+                        onRequestPermission()
+                    }
                 )
-                Spacer(modifier = Modifier.width(4.dp))
             }
 
-            IconButton(
-                onClick = onRecheckBackend,
-                modifier = Modifier.size(24.dp).testTag("panel_recheck_btn")
-            ) {
-                Icon(
-                    imageVector = Icons.Default.Refresh,
-                    contentDescription = "Cek Ulang",
-                    tint = TextSecondary,
-                    modifier = Modifier.size(14.dp)
-                )
-            }
+            DropdownMenuItem(
+                text = {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(Icons.Default.Refresh, contentDescription = null, tint = ColorTextSystem, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text("Cek Ulang Status", color = Color.White, fontSize = 12.sp)
+                    }
+                },
+                onClick = {
+                    menuExpanded = false
+                    onRecheckBackend()
+                }
+            )
         }
     }
 }
 
+/**
+ * Dua tombol besar: CLICK LEFT dan CLICK RIGHT.
+ * Ketuk cepat = klik biasa + scale 0.96 (180ms).
+ * Tahan 600ms = Kunci tombol (active border & green indicator). Ketuk lagi untuk melepas.
+ */
 @Composable
-fun TouchpadSection(
+fun ControlsSection(
+    heldButton: Int,
+    onClickLeft: () -> Unit,
+    onClickRight: () -> Unit,
+    onLockLeft: () -> Unit,
+    onLockRight: () -> Unit,
+    onUnlock: () -> Unit
+) {
+    val isLeftLocked = heldButton == MotionEvent.BUTTON_PRIMARY
+    val isRightLocked = heldButton == MotionEvent.BUTTON_SECONDARY
+
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(CONTROL_BTN_GAP)
+    ) {
+        // Tombol CLICK LEFT
+        ControlButton(
+            modifier = Modifier.weight(1f),
+            label = "CLICK LEFT",
+            isLocked = isLeftLocked,
+            onQuickClick = onClickLeft,
+            onLock = onLockLeft,
+            onUnlock = onUnlock
+        )
+
+        // Tombol CLICK RIGHT
+        ControlButton(
+            modifier = Modifier.weight(1f),
+            label = "CLICK RIGHT",
+            isLocked = isRightLocked,
+            onQuickClick = onClickRight,
+            onLock = onLockRight,
+            onUnlock = onUnlock
+        )
+    }
+}
+
+@Composable
+fun ControlButton(
+    modifier: Modifier = Modifier,
+    label: String,
+    isLocked: Boolean,
+    onQuickClick: () -> Unit,
+    onLock: () -> Unit,
+    onUnlock: () -> Unit
+) {
+    val coroutineScope = rememberCoroutineScope()
+    var isHolding by remember { mutableStateOf(false) }
+    var holdJob by remember { mutableStateOf<Job?>(null) }
+    val scaleAnim = remember { Animatable(1f) }
+
+    // Efek animasi ring holding saat tombol ditekan selama 600ms
+    val holdRingAlpha = remember { Animatable(0.2f) }
+    val holdRingScale = remember { Animatable(0.95f) }
+
+    LaunchedEffect(isHolding) {
+        if (isHolding) {
+            holdRingAlpha.snapTo(0.2f)
+            holdRingScale.snapTo(0.95f)
+            launch {
+                holdRingAlpha.animateTo(1f, tween(600, easing = LinearEasing))
+            }
+            launch {
+                holdRingScale.animateTo(1f, tween(600, easing = LinearEasing))
+            }
+        }
+    }
+
+    val bgBrush = if (isLocked) {
+        Brush.linearGradient(
+            colors = listOf(Color(0x1936D995), Color(0x05FFFFFF)),
+            start = Offset(0f, 0f),
+            end = Offset(400f, 400f)
+        )
+    } else {
+        Brush.linearGradient(
+            colors = listOf(Color(0x0DFFFFFF), Color(0x03FFFFFF)),
+            start = Offset(0f, 0f),
+            end = Offset(400f, 400f)
+        )
+    }
+
+    val borderColor = if (isLocked) ColorActiveBorder else ColorBorderWhite
+
+    Box(
+        modifier = modifier
+            .height(CONTROL_BTN_HEIGHT)
+            .scale(scaleAnim.value)
+            .clip(RoundedCornerShape(CONTROL_BTN_RADIUS))
+            .background(bgBrush)
+            .border(1.dp, borderColor, RoundedCornerShape(CONTROL_BTN_RADIUS))
+            .pointerInput(isLocked) {
+                awaitPointerEventScope {
+                    while (true) {
+                        val downEvent = awaitPointerEvent()
+                        val downChange = downEvent.changes.firstOrNull() ?: continue
+                        if (downChange.pressed) {
+                            downChange.consume()
+
+                            if (isLocked) {
+                                // Sudah terkunci -> ketuk lagi untuk melepas
+                                while (true) {
+                                    val moveOrUp = awaitPointerEvent()
+                                    val change = moveOrUp.changes.firstOrNull() ?: break
+                                    if (!change.pressed) {
+                                        change.consume()
+                                        onUnlock()
+                                        break
+                                    }
+                                }
+                            } else {
+                                // Belum terkunci -> mulai timer tahan 600ms
+                                var reachedHold = false
+                                isHolding = true
+                                holdJob?.cancel()
+                                holdJob = coroutineScope.launch {
+                                    delay(HOLD_TIME_MS)
+                                    reachedHold = true
+                                    isHolding = false
+                                    onLock()
+                                }
+
+                                while (true) {
+                                    val moveOrUp = awaitPointerEvent()
+                                    val change = moveOrUp.changes.firstOrNull() ?: break
+                                    if (!change.pressed) {
+                                        change.consume()
+                                        holdJob?.cancel()
+                                        isHolding = false
+                                        if (!reachedHold) {
+                                            // Ketuk cepat: animasi skala 0.96 (180ms) + panggil klik
+                                            coroutineScope.launch {
+                                                scaleAnim.animateTo(0.96f, tween(90))
+                                                scaleAnim.animateTo(1f, tween(90))
+                                            }
+                                            onQuickClick()
+                                        }
+                                        break
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+        contentAlignment = Alignment.Center
+    ) {
+        // Hold ring glow indicator saat proses menahan 600ms
+        if (isHolding) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(3.dp)
+                    .scale(holdRingScale.value)
+                    .border(
+                        2.dp,
+                        ColorActiveGreen.copy(alpha = holdRingAlpha.value * 0.45f),
+                        RoundedCornerShape(14.dp)
+                    )
+            )
+        }
+
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center
+        ) {
+            // Indikator titik 8dp
+            Box(
+                modifier = Modifier
+                    .size(8.dp)
+                    .drawBehind {
+                        if (isLocked) {
+                            // Glow hijau menyala
+                            drawCircle(
+                                color = ColorActiveGreen.copy(alpha = 0.4f),
+                                radius = 8.dp.toPx()
+                            )
+                            drawCircle(
+                                color = ColorActiveGreen,
+                                radius = 4.dp.toPx()
+                            )
+                        } else {
+                            drawCircle(
+                                color = ColorDotInactive,
+                                radius = 4.dp.toPx()
+                            )
+                        }
+                    }
+            )
+
+            Spacer(modifier = Modifier.height(6.dp))
+
+            // Label teks 11sp bold letterSpacing 1.5sp
+            Text(
+                text = label,
+                fontSize = 11.sp,
+                fontWeight = FontWeight.Bold,
+                letterSpacing = 1.5.sp,
+                color = Color.White
+            )
+        }
+    }
+}
+
+/**
+ * Baris Touchpad & Scroll Strip:
+ * Touchpad kiri (fleksibel) dan Scroll Strip kanan (20dp).
+ */
+@Composable
+fun TouchRowSection(
+    onRelativeMove: (dx: Float, dy: Float) -> Unit,
+    onScroll: (notches: Int) -> Unit
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        // Touchpad Area
+        TouchpadArea(
+            modifier = Modifier
+                .weight(1f)
+                .height(TOUCHPAD_HEIGHT),
+            onRelativeMove = onRelativeMove
+        )
+
+        // Scroll Strip
+        ScrollStrip(
+            modifier = Modifier
+                .width(SCROLL_STRIP_WIDTH)
+                .height(TOUCHPAD_HEIGHT),
+            onScroll = onScroll
+        )
+    }
+}
+
+/**
+ * Touchpad Relatif:
+ * Menghitung akselerasi persis seperti rumus JavaScript di HTML:
+ * smoothSpeed = smoothSpeed * 0.6 + (hypot(dx, dy) / dt) * 0.4
+ * gain = min(BASE_GAIN + smoothSpeed * ACCEL, MAX_GAIN)
+ */
+@Composable
+fun TouchpadArea(
+    modifier: Modifier = Modifier,
     onRelativeMove: (dx: Float, dy: Float) -> Unit
 ) {
-    var touchIndicator by remember { mutableStateOf<Offset?>(null) }
+    var isTouching by remember { mutableStateOf(false) }
 
-    Column(
+    val bgColor = if (isTouching) Color(0x59000000) else Color(0x40000000)
+    val borderColor = if (isTouching) Color(0x5539EFA1) else ColorBorderWhite
+
+    Box(
+        modifier = modifier
+            .clip(RoundedCornerShape(TOUCHPAD_RADIUS))
+            .background(bgColor)
+            .border(1.dp, borderColor, RoundedCornerShape(TOUCHPAD_RADIUS))
+            .pointerInput(Unit) {
+                awaitPointerEventScope {
+                    var lastX = 0f
+                    var lastY = 0f
+                    var lastTime = 0L
+                    var smoothSpeed = 0f
+
+                    while (true) {
+                        val event = awaitPointerEvent()
+                        val change = event.changes.firstOrNull() ?: continue
+
+                        if (change.pressed) {
+                            change.consume()
+                            if (!isTouching) {
+                                isTouching = true
+                                lastX = change.position.x
+                                lastY = change.position.y
+                                lastTime = change.uptimeMillis
+                                smoothSpeed = 0f
+                            } else {
+                                val dx = change.position.x - lastX
+                                val dy = change.position.y - lastY
+                                val dt = (change.uptimeMillis - lastTime).coerceAtLeast(4L)
+                                lastX = change.position.x
+                                lastY = change.position.y
+                                lastTime = change.uptimeMillis
+
+                                val rawSpeed = hypot(dx, dy) / dt.toFloat()
+                                smoothSpeed = smoothSpeed * 0.6f + rawSpeed * 0.4f
+                                val gain = (BASE_GAIN + smoothSpeed * ACCEL).coerceAtMost(MAX_GAIN)
+
+                                onRelativeMove(dx * gain, dy * gain)
+                            }
+                        } else {
+                            isTouching = false
+                        }
+                    }
+                }
+            }
+            .testTag("touchpad_area"),
+        contentAlignment = Alignment.Center
+    ) {
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center
+        ) {
+            Text(
+                text = "TOUCH PAD",
+                fontSize = 12.sp,
+                fontWeight = FontWeight.Bold,
+                letterSpacing = 1.5.sp,
+                color = ColorTextTouchpad
+            )
+            Spacer(modifier = Modifier.height(6.dp))
+            Text(
+                text = "UNTUK MENGGERAKKAN KURSOR",
+                fontSize = 9.sp,
+                fontWeight = FontWeight.Normal,
+                color = ColorTextSub
+            )
+        }
+    }
+}
+
+/**
+ * Strip SCROLL di sebelah kanan touchpad:
+ * Garis-garis tick tiap 16dp bergerak mengikuti jari, panah ▲ ▼, teks SCROLL diputar -90 derajat.
+ * Satu notch tiap 24dp geseran, mode natural.
+ */
+@Composable
+fun ScrollStrip(
+    modifier: Modifier = Modifier,
+    onScroll: (notches: Int) -> Unit
+) {
+    val density = LocalDensity.current
+    var isTouching by remember { mutableStateOf(false) }
+    var tickOffset by remember { mutableFloatStateOf(0f) }
+
+    val bgColor = if (isTouching) Color(0x59000000) else Color(0x40000000)
+    val borderColor = if (isTouching) Color(0x5539EFA1) else ColorBorderWhite
+    val contentColor = if (isTouching) ColorActiveGreen else ColorTextSub
+    val arrowColor = if (isTouching) ColorActiveGreen else ColorTextTouchpad
+
+    val tickIntervalPx = with(density) { SCROLL_TICK_INTERVAL_DP.dp.toPx() }
+    val scrollStepPx = with(density) { SCROLL_STEP_PX.dp.toPx() }
+
+    Box(
+        modifier = modifier
+            .clip(RoundedCornerShape(SCROLL_STRIP_RADIUS))
+            .background(bgColor)
+            .border(1.dp, borderColor, RoundedCornerShape(SCROLL_STRIP_RADIUS))
+            .pointerInput(Unit) {
+                awaitPointerEventScope {
+                    var lastY = 0f
+                    var scrollAcc = 0f
+
+                    while (true) {
+                        val event = awaitPointerEvent()
+                        val change = event.changes.firstOrNull() ?: continue
+
+                        if (change.pressed) {
+                            change.consume()
+                            if (!isTouching) {
+                                isTouching = true
+                                lastY = change.position.y
+                                scrollAcc = 0f
+                            } else {
+                                val dy = change.position.y - lastY
+                                lastY = change.position.y
+
+                                // Update garis-garis tick
+                                tickOffset = (tickOffset + dy) % tickIntervalPx
+
+                                // Akumulasi scroll (natural mode)
+                                scrollAcc += if (SCROLL_NATURAL) -dy else dy
+                                val notches = (scrollAcc / scrollStepPx).toInt()
+                                if (notches != 0) {
+                                    scrollAcc -= notches * scrollStepPx
+                                    onScroll(notches)
+                                }
+                            }
+                        } else {
+                            isTouching = false
+                        }
+                    }
+                }
+            }
+            .drawBehind {
+                // Gambar garis-garis tick tiap 16dp
+                val tickColor = Color(0x22FFFFFF)
+                val strokeW = 1.5.dp.toPx()
+                var y = tickOffset
+                if (y > 0) y -= tickIntervalPx
+                while (y < size.height) {
+                    if (y >= 0) {
+                        drawLine(
+                            color = tickColor,
+                            start = Offset(0f, y),
+                            end = Offset(size.width, y),
+                            strokeWidth = strokeW
+                        )
+                    }
+                    y += tickIntervalPx
+                }
+            }
+            .testTag("scroll_strip")
+    ) {
+        // Panah Atas ▲ (10dp dari atas)
+        Text(
+            text = "▲",
+            fontSize = 9.sp,
+            color = arrowColor,
+            modifier = Modifier
+                .align(Alignment.TopCenter)
+                .padding(top = 10.dp)
+        )
+
+        // Teks SCROLL diputar -90 derajat di tengah
+        Text(
+            text = "SCROLL",
+            fontSize = 9.sp,
+            fontWeight = FontWeight.Bold,
+            letterSpacing = 2.sp,
+            color = contentColor,
+            modifier = Modifier
+                .align(Alignment.Center)
+                .rotate(-90f)
+        )
+
+        // Panah Bawah ▼ (10dp dari bawah)
+        Text(
+            text = "▼",
+            fontSize = 9.sp,
+            color = arrowColor,
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .padding(bottom = 10.dp)
+        )
+    }
+}
+
+/**
+ * Handle geser di bawah (120dp x 6dp, radius 10dp, margin atas 18dp).
+ * Area sentuh vertikal diperbesar (32dp) agar nyaman digeser.
+ */
+@Composable
+fun DragHandleBottom(
+    onDragPanel: (dx: Float, dy: Float) -> Unit
+) {
+    var isDragging by remember { mutableStateOf(false) }
+
+    Box(
         modifier = Modifier
             .fillMaxWidth()
-            .background(DarkSurfaceVariant, RoundedCornerShape(12.dp))
-            .padding(8.dp)
-    ) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Text(
-                text = "TOUCHPAD RELATIF",
-                fontSize = 9.sp,
-                fontWeight = FontWeight.Bold,
-                color = TextTertiary,
-                letterSpacing = 0.5.sp
-            )
-            Text(
-                text = "Geser untuk arahkan",
-                fontSize = 9.sp,
-                color = TextSecondary
-            )
-        }
-
-        Spacer(modifier = Modifier.height(6.dp))
-
-        // Touchpad surface
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(80.dp)
-                .clip(RoundedCornerShape(8.dp))
-                .background(DarkBg)
-                .border(1.dp, DarkCardBorder, RoundedCornerShape(8.dp))
-                .pointerInput(Unit) {
-                    detectDragGestures(
-                        onDragStart = { offset ->
-                            touchIndicator = offset
-                        },
-                        onDragEnd = {
-                            touchIndicator = null
-                        },
-                        onDragCancel = {
-                            touchIndicator = null
-                        },
-                        onDrag = { change, dragAmount ->
-                            change.consume()
-                            touchIndicator = change.position
-                            // Scale factor 1.8x for responsive cursor displacement
-                            onRelativeMove(dragAmount.x * 1.8f, dragAmount.y * 1.8f)
-                        }
-                    )
-                }
-                .testTag("relative_touchpad"),
-            contentAlignment = Alignment.Center
-        ) {
-            // Subtle cross guide
-            Text(
-                text = "+",
-                fontSize = 20.sp,
-                color = TextTertiary.copy(alpha = 0.3f),
-                fontFamily = FontFamily.Monospace
-            )
-
-            // Touch point feedback ring
-            touchIndicator?.let { pos ->
-                Box(
-                    modifier = Modifier
-                        .size(24.dp)
-                        .background(NeonCyan.copy(alpha = 0.25f), CircleShape)
-                        .border(1.dp, NeonCyan, CircleShape)
+            .padding(top = DRAG_HANDLE_TOP_MARGIN)
+            .height(DRAG_HANDLE_TOUCH_HEIGHT)
+            .pointerInput(Unit) {
+                detectDragGestures(
+                    onDragStart = { isDragging = true },
+                    onDragEnd = { isDragging = false },
+                    onDragCancel = { isDragging = false },
+                    onDrag = { change, dragAmount ->
+                        change.consume()
+                        onDragPanel(dragAmount.x, dragAmount.y)
+                    }
                 )
             }
-        }
-
-        Spacer(modifier = Modifier.height(6.dp))
-
-        // Fine Micro Nudge buttons (5px each tap)
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceEvenly,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            IconButton(
-                onClick = { onRelativeMove(-5f, 0f) },
-                modifier = Modifier.size(28.dp).background(DarkBg, CircleShape)
-            ) {
-                Icon(Icons.Default.KeyboardArrowLeft, contentDescription = "Kiri", tint = TextSecondary, modifier = Modifier.size(16.dp))
-            }
-            IconButton(
-                onClick = { onRelativeMove(0f, -5f) },
-                modifier = Modifier.size(28.dp).background(DarkBg, CircleShape)
-            ) {
-                Icon(Icons.Default.KeyboardArrowUp, contentDescription = "Atas", tint = TextSecondary, modifier = Modifier.size(16.dp))
-            }
-            IconButton(
-                onClick = { onRelativeMove(0f, 5f) },
-                modifier = Modifier.size(28.dp).background(DarkBg, CircleShape)
-            ) {
-                Icon(Icons.Default.KeyboardArrowDown, contentDescription = "Bawah", tint = TextSecondary, modifier = Modifier.size(16.dp))
-            }
-            IconButton(
-                onClick = { onRelativeMove(5f, 0f) },
-                modifier = Modifier.size(28.dp).background(DarkBg, CircleShape)
-            ) {
-                Icon(Icons.Default.KeyboardArrowRight, contentDescription = "Kanan", tint = TextSecondary, modifier = Modifier.size(16.dp))
-            }
-        }
+            .testTag("drag_handle_area"),
+        contentAlignment = Alignment.Center
+    ) {
+        Box(
+            modifier = Modifier
+                .width(DRAG_HANDLE_WIDTH)
+                .height(DRAG_HANDLE_HEIGHT)
+                .clip(RoundedCornerShape(10.dp))
+                .background(if (isDragging) ColorActiveGreen else ColorHandle)
+        )
     }
 }

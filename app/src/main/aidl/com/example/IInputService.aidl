@@ -7,4 +7,5 @@ interface IInputService {
     void pressDown(float x, float y, int button);
     void moveHeld(float x, float y, int button);
     void release(float x, float y, int button);
+    void scroll(float x, float y, int notches);
 }

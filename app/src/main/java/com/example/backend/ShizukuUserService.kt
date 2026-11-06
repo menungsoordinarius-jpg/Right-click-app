@@ -44,6 +44,10 @@ class ShizukuUserService : IInputService.Stub {
         delegate.release(x, y, button)
     }
 
+    override fun scroll(x: Float, y: Float, notches: Int) {
+        delegate.scroll(x, y, notches)
+    }
+
     /**
      * Called when Shizuku UserService is destroyed
      */

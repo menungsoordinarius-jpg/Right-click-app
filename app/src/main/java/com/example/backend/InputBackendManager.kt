@@ -144,10 +144,10 @@ class InputBackendManager private constructor(private val appContext: Context) {
                 _backendState.value = BackendState(
                     type = BackendType.SHIZUKU,
                     status = BackendStatus.READY,
-                    message = "Siap",
+                    message = "READY (shizuku is connect)",
                     isReady = true
                 )
-                Log.i(TAG, "Shizuku UserService terhubung sukses! Status: Siap (hijau)")
+                Log.i(TAG, "Shizuku UserService terhubung sukses! Status: Siap (READY)")
             } else {
                 inputService = null
                 _backendState.value = BackendState(
@@ -181,10 +181,10 @@ class InputBackendManager private constructor(private val appContext: Context) {
                 _backendState.value = BackendState(
                     type = BackendType.ROOT,
                     status = BackendStatus.READY,
-                    message = "Siap",
+                    message = "READY (root is connect)",
                     isReady = true
                 )
-                Log.i(TAG, "RootService terhubung sukses! Status: Siap (hijau)")
+                Log.i(TAG, "RootService terhubung sukses! Status: Siap (READY)")
             } else {
                 inputService = null
                 _backendState.value = BackendState(
@@ -268,7 +268,7 @@ class InputBackendManager private constructor(private val appContext: Context) {
         _backendState.value = BackendState(
             type = targetType,
             status = BackendStatus.CONNECTING,
-            message = "Beralih ke $targetType...",
+            message = "MENGHUBUNGKAN...",
             isReady = false
         )
         if (targetType == BackendType.SHIZUKU) {
@@ -327,10 +327,10 @@ class InputBackendManager private constructor(private val appContext: Context) {
 
     /**
      * Menghitung status Shizuku dengan urutan:
-     * a) Shizuku.pingBinder() == false -> "Shizuku belum berjalan"
-     * b) Shizuku.checkSelfPermission() != PERMISSION_GRANTED -> "Izin belum diberikan"
-     * c) Izin ada tetapi UserService belum terhubung -> "Menghubungkan service..." lalu bindUserService
-     * d) Semua siap -> "Siap" (hijau)
+     * a) Shizuku.pingBinder() == false -> "SHIZUKU BELUM BERJALAN"
+     * b) Shizuku.checkSelfPermission() != PERMISSION_GRANTED -> "IZIN SHIZUKU BELUM DIBERIKAN"
+     * c) Izin ada tetapi UserService belum terhubung -> "MENGHUBUNGKAN..." lalu bindUserService
+     * d) Semua siap -> "READY (shizuku is connect)" (hijau)
      */
     private fun checkShizukuStatusAndConnect() {
         checkJob?.cancel()
@@ -352,7 +352,7 @@ class InputBackendManager private constructor(private val appContext: Context) {
                 _backendState.value = BackendState(
                     type = BackendType.SHIZUKU,
                     status = BackendStatus.NOT_RUNNING,
-                    message = "Shizuku belum berjalan",
+                    message = "SHIZUKU BELUM BERJALAN",
                     isReady = false
                 )
                 return@launch
@@ -376,7 +376,7 @@ class InputBackendManager private constructor(private val appContext: Context) {
                 _backendState.value = BackendState(
                     type = BackendType.SHIZUKU,
                     status = BackendStatus.PERMISSION_REQUIRED,
-                    message = "Izin belum diberikan",
+                    message = "IZIN SHIZUKU BELUM DIBERIKAN",
                     isReady = false
                 )
                 return@launch
@@ -385,22 +385,22 @@ class InputBackendManager private constructor(private val appContext: Context) {
             // c & d) Izin ada: cek apakah service sudah terhubung
             val service = inputService
             if (service != null && service.asBinder().pingBinder()) {
-                Log.i(TAG, "[Shizuku Check] Hasil: Semua siap! (UserService aktif)")
+                Log.i(TAG, "[Shizuku Check] Hasil: Semua siap! (READY)")
                 _backendState.value = BackendState(
                     type = BackendType.SHIZUKU,
                     status = BackendStatus.READY,
-                    message = "Siap",
+                    message = "READY (shizuku is connect)",
                     isReady = true
                 )
                 return@launch
             }
 
-            // c) UserService belum terhubung -> "Menghubungkan service..." lalu bindUserService
+            // c) UserService belum terhubung -> "MENGHUBUNGKAN..." lalu bindUserService
             Log.i(TAG, "[Shizuku Check] Langkah 3: Menghubungkan service via Shizuku.bindUserService...")
             _backendState.value = BackendState(
                 type = BackendType.SHIZUKU,
                 status = BackendStatus.CONNECTING,
-                message = "Menghubungkan service...",
+                message = "MENGHUBUNGKAN...",
                 isReady = false
             )
 
@@ -421,7 +421,7 @@ class InputBackendManager private constructor(private val appContext: Context) {
                 _backendState.value = BackendState(
                     type = BackendType.SHIZUKU,
                     status = BackendStatus.ERROR,
-                    message = "Gagal menghubungkan: ${t.localizedMessage ?: "Error"}",
+                    message = "ERROR: ${t.localizedMessage ?: "Gagal konek"}",
                     isReady = false
                 )
             }
@@ -456,7 +456,7 @@ class InputBackendManager private constructor(private val appContext: Context) {
                 _backendState.value = BackendState(
                     type = BackendType.SHIZUKU,
                     status = BackendStatus.NOT_RUNNING,
-                    message = "Shizuku belum berjalan",
+                    message = "SHIZUKU BELUM BERJALAN",
                     isReady = false
                 )
             }
@@ -465,7 +465,7 @@ class InputBackendManager private constructor(private val appContext: Context) {
             _backendState.value = BackendState(
                 type = BackendType.SHIZUKU,
                 status = BackendStatus.ERROR,
-                message = "Error: ${t.localizedMessage}",
+                message = "ERROR",
                 isReady = false
             )
         }
@@ -478,7 +478,7 @@ class InputBackendManager private constructor(private val appContext: Context) {
             _backendState.value = BackendState(
                 type = BackendType.ROOT,
                 status = BackendStatus.CONNECTING,
-                message = "Mengecek akses Root...",
+                message = "MENGHUBUNGKAN...",
                 isReady = false
             )
 
@@ -499,7 +499,7 @@ class InputBackendManager private constructor(private val appContext: Context) {
                 _backendState.value = BackendState(
                     type = BackendType.ROOT,
                     status = BackendStatus.NOT_RUNNING,
-                    message = "Akses Root (su) tidak terdeteksi",
+                    message = "ROOT TIDAK TERDETEKSI",
                     isReady = false
                 )
                 return@launch
@@ -507,11 +507,11 @@ class InputBackendManager private constructor(private val appContext: Context) {
 
             val service = inputService
             if (service != null && service.asBinder().pingBinder()) {
-                Log.i(TAG, "[Root Check] RootService sudah terhubung! Status: Siap")
+                Log.i(TAG, "[Root Check] RootService sudah terhubung! Status: READY")
                 _backendState.value = BackendState(
                     type = BackendType.ROOT,
                     status = BackendStatus.READY,
-                    message = "Siap",
+                    message = "READY (root is connect)",
                     isReady = true
                 )
                 return@launch
@@ -521,7 +521,7 @@ class InputBackendManager private constructor(private val appContext: Context) {
             _backendState.value = BackendState(
                 type = BackendType.ROOT,
                 status = BackendStatus.CONNECTING,
-                message = "Menghubungkan service...",
+                message = "MENGHUBUNGKAN...",
                 isReady = false
             )
 
@@ -534,7 +534,7 @@ class InputBackendManager private constructor(private val appContext: Context) {
                 _backendState.value = BackendState(
                     type = BackendType.ROOT,
                     status = BackendStatus.ERROR,
-                    message = "Gagal memulai RootService: ${t.localizedMessage}",
+                    message = "ERROR",
                     isReady = false
                 )
             }
@@ -650,6 +650,23 @@ class InputBackendManager private constructor(private val appContext: Context) {
                 false
             }
         } else {
+            false
+        }
+    }
+
+    fun scroll(x: Float, y: Float, notches: Int): Boolean {
+        val service = inputService
+        return if (service != null) {
+            try {
+                Log.d(TAG, "scroll($x, $y, notches=$notches) dikirim ke InputService")
+                service.scroll(x, y, notches)
+                true
+            } catch (t: Throwable) {
+                Log.e(TAG, "IPC scroll error: ${t.message}", t)
+                false
+            }
+        } else {
+            Log.w(TAG, "InputService belum terhubung saat scroll($x, $y, $notches)")
             false
         }
     }
