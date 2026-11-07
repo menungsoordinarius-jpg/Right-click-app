@@ -16,6 +16,9 @@ import java.lang.reflect.Method
  * Singleton implementation of IInputService that injects genuine mouse events
  * into Android InputManager using HiddenApiBypass and reflection.
  * Hosted by both Shizuku UserService and libsu RootService.
+ *
+ * Mengirim event suntikan secara berurutan di satu HandlerThread,
+ * serta menggabungkan gerakan beruntun (coalescing) sehingga hanya posisi terbaru yang dikirim.
  */
 @Keep
 class InputServiceImpl : IInputService.Stub() {
@@ -23,6 +26,8 @@ class InputServiceImpl : IInputService.Stub() {
     companion object {
         private const val TAG = "RCD"
         private const val INJECT_INPUT_EVENT_MODE_ASYNC = 0
+        private const val INJECT_INPUT_EVENT_MODE_WAIT_FOR_RESULT = 1
+        private const val INJECT_INPUT_EVENT_MODE_WAIT_FOR_FINISH = 2
 
         @Volatile
         private var instance: InputServiceImpl? = null
@@ -52,6 +57,36 @@ class InputServiceImpl : IInputService.Stub() {
     private var moveHeldCounter: Int = 0
     @Volatile
     private var lastMoveHeldTime: Long = 0L
+
+    // State untuk coalescing gerakan kursor (menggabungkan gerakan beruntun)
+    private val moveLock = Any()
+    @Volatile
+    private var pendingMoveX: Float = 0f
+    @Volatile
+    private var pendingMoveY: Float = 0f
+    @Volatile
+    private var pendingMoveButton: Int = 0
+    @Volatile
+    private var hasPendingMove: Boolean = false
+
+    private val coalescedMoveRunnable = Runnable {
+        val x: Float
+        val y: Float
+        val btn: Int
+        synchronized(moveLock) {
+            if (!hasPendingMove) return@Runnable
+            hasPendingMove = false
+            x = pendingMoveX
+            y = pendingMoveY
+            btn = pendingMoveButton
+        }
+
+        if (activeDragButton != 0 && activeDragDownTime != 0L) {
+            executeMoveHeld(x, y, if (btn != 0) btn else activeDragButton)
+        } else {
+            executeMove(x, y)
+        }
+    }
 
     init {
         initHiddenApi()
@@ -92,48 +127,81 @@ class InputServiceImpl : IInputService.Stub() {
         }
     }
 
+    /**
+     * Memastikan gerakan kursor pending dieksekusi sebelum event diskrit (klik, tekan, lepas).
+     */
+    private fun flushPendingMoveSync() {
+        synchronized(moveLock) {
+            if (hasPendingMove) {
+                hasPendingMove = false
+                handler.removeCallbacks(coalescedMoveRunnable)
+                val x = pendingMoveX
+                val y = pendingMoveY
+                val btn = pendingMoveButton
+                if (activeDragButton != 0 && activeDragDownTime != 0L) {
+                    executeMoveHeld(x, y, if (btn != 0) btn else activeDragButton)
+                } else {
+                    executeMove(x, y)
+                }
+            }
+        }
+    }
+
     override fun click(x: Float, y: Float, button: Int) {
         handler.post {
+            flushPendingMoveSync()
             executeClick(x, y, button)
         }
     }
 
     override fun hold(x: Float, y: Float, button: Int, durationMs: Long) {
         handler.post {
+            flushPendingMoveSync()
             executeHold(x, y, button, durationMs.coerceIn(100L, 10000L))
         }
     }
 
     override fun move(x: Float, y: Float) {
-        handler.post {
-            if (activeDragButton != 0 && activeDragDownTime != 0L) {
-                executeMoveHeld(x, y, activeDragButton)
-            } else {
-                executeMove(x, y)
+        synchronized(moveLock) {
+            pendingMoveX = x
+            pendingMoveY = y
+            pendingMoveButton = activeDragButton
+            if (!hasPendingMove) {
+                hasPendingMove = true
+                handler.post(coalescedMoveRunnable)
             }
         }
     }
 
     override fun pressDown(x: Float, y: Float, button: Int) {
         handler.post {
+            flushPendingMoveSync()
             executePressDown(x, y, button)
         }
     }
 
     override fun moveHeld(x: Float, y: Float, button: Int) {
-        handler.post {
-            executeMoveHeld(x, y, button)
+        synchronized(moveLock) {
+            pendingMoveX = x
+            pendingMoveY = y
+            pendingMoveButton = button
+            if (!hasPendingMove) {
+                hasPendingMove = true
+                handler.post(coalescedMoveRunnable)
+            }
         }
     }
 
     override fun release(x: Float, y: Float, button: Int) {
         handler.post {
+            flushPendingMoveSync()
             executeRelease(x, y, button)
         }
     }
 
     override fun scroll(x: Float, y: Float, notches: Int) {
         handler.post {
+            flushPendingMoveSync()
             executeScroll(x, y, notches)
         }
     }
@@ -236,8 +304,8 @@ class InputServiceImpl : IInputService.Stub() {
     private fun executeMoveHeld(x: Float, y: Float, button: Int) {
         try {
             val now = SystemClock.uptimeMillis()
-            // Batasi maksimal sekitar 60 kali per detik (~16 ms per event)
-            if (now - lastMoveHeldTime < 16L) {
+            // Batasi maksimal sekitar 60-120 kali per detik (~8 ms per event)
+            if (now - lastMoveHeldTime < 8L) {
                 return
             }
             lastMoveHeldTime = now
@@ -407,7 +475,7 @@ class InputServiceImpl : IInputService.Stub() {
             }
 
             if (inputManagerInstance != null && injectInputEventMethod != null) {
-                injectInputEventMethod?.invoke(inputManagerInstance, event, INJECT_INPUT_EVENT_MODE_ASYNC)
+                injectInputEventMethod?.invoke(inputManagerInstance, event, INJECT_INPUT_EVENT_MODE_WAIT_FOR_RESULT)
             } else {
                 // Secondary fallback via HiddenApiBypass
                 val inputManagerClass = Class.forName("android.hardware.input.InputManager")
@@ -417,7 +485,7 @@ class InputServiceImpl : IInputService.Stub() {
                     im,
                     "injectInputEvent",
                     event,
-                    INJECT_INPUT_EVENT_MODE_ASYNC
+                    INJECT_INPUT_EVENT_MODE_WAIT_FOR_RESULT
                 )
             }
         } catch (t: Throwable) {

@@ -47,7 +47,9 @@ import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Security
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Stop
+import androidx.compose.material.icons.filled.TouchApp
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -90,6 +92,9 @@ import com.example.backend.BackendStatus
 import com.example.backend.BackendType
 import com.example.backend.InputBackendManager
 import com.example.service.OverlayService
+import com.example.ui.overlay.InputMode
+import com.example.ui.overlay.SettingsDialog
+import com.example.ui.overlay.TouchSettings
 import com.example.ui.theme.AccentPurple
 import com.example.ui.theme.DarkBg
 import com.example.ui.theme.DarkCardBorder
@@ -129,6 +134,8 @@ fun MainScreen() {
     var hasOverlayPermission by remember { mutableStateOf(checkOverlayPermission(context)) }
     var hasNotificationPermission by remember { mutableStateOf(checkNotificationPermission(context)) }
     var isServiceRunning by remember { mutableStateOf(OverlayService.isRunning) }
+    var touchSettings by remember { mutableStateOf(TouchSettings.load(context)) }
+    var showSettingsDialog by remember { mutableStateOf(false) }
 
     // Re-check permissions on resume
     val lifecycleOwner = LocalLifecycleOwner.current
@@ -276,6 +283,22 @@ fun MainScreen() {
                 )
             }
 
+            // Mode Input: Layar Sentuh / Touchpad
+            item {
+                InputModeCard(
+                    currentMode = touchSettings.inputMode,
+                    onSelectMode = { mode ->
+                        val updated = touchSettings.copy(inputMode = mode)
+                        touchSettings = updated
+                        TouchSettings.save(context, updated)
+                        Toast.makeText(context, "Mode input: ${mode.displayName}", Toast.LENGTH_SHORT).show()
+                    },
+                    onOpenSettings = {
+                        showSettingsDialog = true
+                    }
+                )
+            }
+
             // Step 4: Primary Action Button (Start / Stop Overlay)
             item {
                 PrimaryActionCard(
@@ -323,6 +346,18 @@ fun MainScreen() {
             item {
                 Spacer(modifier = Modifier.height(24.dp))
             }
+        }
+
+        if (showSettingsDialog) {
+            SettingsDialog(
+                initialSettings = touchSettings,
+                onDismissRequest = { showSettingsDialog = false },
+                onSaveSettings = { updated ->
+                    touchSettings = updated
+                    TouchSettings.save(context, updated)
+                    Toast.makeText(context, "Pengaturan gerakan disimpan", Toast.LENGTH_SHORT).show()
+                }
+            )
         }
     }
 }
@@ -606,6 +641,136 @@ fun BackendCard(
                         )
                     }
                 }
+            }
+        }
+    }
+}
+
+@Composable
+fun InputModeCard(
+    currentMode: InputMode,
+    onSelectMode: (InputMode) -> Unit,
+    onOpenSettings: () -> Unit
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(14.dp),
+        colors = CardDefaults.cardColors(containerColor = DarkSurface),
+        border = CardDefaults.outlinedCardBorder().copy(brush = androidx.compose.ui.graphics.SolidColor(DarkCardBorder))
+    ) {
+        Column(modifier = Modifier.padding(14.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    imageVector = Icons.Default.TouchApp,
+                    contentDescription = null,
+                    tint = NeonCyan,
+                    modifier = Modifier.size(20.dp)
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    text = "Mode Input Kursor",
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.Bold,
+                    color = TextPrimary
+                )
+            }
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(
+                text = "Pilih Layar Sentuh untuk memakai jari langsung di layar, atau Touchpad untuk panel melayang virtual.",
+                style = MaterialTheme.typography.bodySmall,
+                color = TextSecondary
+            )
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            // Segmented Switch Mode Input
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(DarkBg, RoundedCornerShape(10.dp))
+                    .padding(4.dp),
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                val isTouchscreen = currentMode == InputMode.TOUCHSCREEN
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(if (isTouchscreen) NeonCyan else Color.Transparent)
+                        .clickable { onSelectMode(InputMode.TOUCHSCREEN) }
+                        .padding(vertical = 8.dp)
+                        .testTag("mode_tab_touchscreen"),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(
+                            imageVector = Icons.Default.TouchApp,
+                            contentDescription = null,
+                            tint = if (isTouchscreen) Color.Black else TextSecondary,
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(
+                            text = "Layar Sentuh (Bawaan)",
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 11.sp,
+                            color = if (isTouchscreen) Color.Black else TextSecondary
+                        )
+                    }
+                }
+
+                val isTouchpad = currentMode == InputMode.TOUCHPAD
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(if (isTouchpad) NeonCyan else Color.Transparent)
+                        .clickable { onSelectMode(InputMode.TOUCHPAD) }
+                        .padding(vertical = 8.dp)
+                        .testTag("mode_tab_touchpad"),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(
+                            imageVector = Icons.Default.Mouse,
+                            contentDescription = null,
+                            tint = if (isTouchpad) Color.Black else TextSecondary,
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(
+                            text = "Touchpad Virtual",
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 11.sp,
+                            color = if (isTouchpad) Color.Black else TextSecondary
+                        )
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(10.dp))
+
+            // Tombol buka pengaturan gerakan & sensistivitas
+            OutlinedButton(
+                onClick = onOpenSettings,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(36.dp)
+                    .testTag("open_gesture_settings_btn"),
+                shape = RoundedCornerShape(8.dp),
+                colors = ButtonDefaults.outlinedButtonColors(contentColor = NeonCyan)
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Settings,
+                    contentDescription = null,
+                    modifier = Modifier.size(16.dp)
+                )
+                Spacer(modifier = Modifier.width(6.dp))
+                Text(
+                    text = "Konfigurasi Gerakan & Sensitivitas...",
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Bold
+                )
             }
         }
     }
