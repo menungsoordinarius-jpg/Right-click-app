@@ -125,8 +125,8 @@ enum class RecordMode(val displayName: String) {
  * Pilihan Perilaku Panel (Tembus vs Dinding)
  */
 enum class PanelBehavior(val displayName: String) {
-    TEMBUS("Tembus"),
-    DINDING("Dinding")
+    DINDING("Dinding (Default)"),
+    TEMBUS("Tembus (eksperimen)")
 }
 
 /**
@@ -138,7 +138,7 @@ fun ControlPanel(
     cursorX: Float,
     cursorY: Float,
     recordMode: RecordMode = RecordMode.OFF,
-    panelBehavior: PanelBehavior = PanelBehavior.TEMBUS,
+    panelBehavior: PanelBehavior = PanelBehavior.DINDING,
     inputMode: InputMode = InputMode.TOUCHPAD,
     heldButton: Int = 0,
     resetTouchpadTrigger: Int = 0,
@@ -405,32 +405,32 @@ fun HeaderSection(
             DropdownMenuItem(
                 text = {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        if (panelBehavior == PanelBehavior.TEMBUS) {
+                        if (panelBehavior == PanelBehavior.DINDING) {
                             Icon(Icons.Default.Check, contentDescription = null, tint = ColorActiveGreen, modifier = Modifier.size(16.dp))
                             Spacer(modifier = Modifier.width(8.dp))
                         }
-                        Text("Perilaku: Tembus (Default)", color = Color.White, fontSize = 12.sp)
+                        Text("Perilaku: Dinding (Default)", color = Color.White, fontSize = 12.sp)
                     }
                 },
                 onClick = {
                     menuExpanded = false
-                    onSelectPanelBehavior(PanelBehavior.TEMBUS)
+                    onSelectPanelBehavior(PanelBehavior.DINDING)
                 }
             )
 
             DropdownMenuItem(
                 text = {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        if (panelBehavior == PanelBehavior.DINDING) {
+                        if (panelBehavior == PanelBehavior.TEMBUS) {
                             Icon(Icons.Default.Check, contentDescription = null, tint = ColorActiveGreen, modifier = Modifier.size(16.dp))
                             Spacer(modifier = Modifier.width(8.dp))
                         }
-                        Text("Perilaku: Dinding", color = Color.White, fontSize = 12.sp)
+                        Text("Perilaku: Tembus (eksperimen)", color = Color.White, fontSize = 12.sp)
                     }
                 },
                 onClick = {
                     menuExpanded = false
-                    onSelectPanelBehavior(PanelBehavior.DINDING)
+                    onSelectPanelBehavior(PanelBehavior.TEMBUS)
                 }
             )
 

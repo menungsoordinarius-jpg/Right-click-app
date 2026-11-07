@@ -68,6 +68,8 @@ class InputServiceImpl : IInputService.Stub() {
     private var pendingMoveButton: Int = 0
     @Volatile
     private var hasPendingMove: Boolean = false
+    @Volatile
+    private var diagnosticEventCounter: Int = 0
 
     private val coalescedMoveRunnable = Runnable {
         val x: Float
@@ -203,6 +205,13 @@ class InputServiceImpl : IInputService.Stub() {
         handler.post {
             flushPendingMoveSync()
             executeScroll(x, y, notches)
+        }
+    }
+
+    override fun resetDiagnostics() {
+        handler.post {
+            diagnosticEventCounter = 0
+            Log.i(TAG, "Diagnostik injeksi di-reset (akan mencatat 20 event pertama).")
         }
     }
 
@@ -469,28 +478,42 @@ class InputServiceImpl : IInputService.Stub() {
     }
 
     private fun injectEvent(event: MotionEvent) {
+        var success = false
+        val actionCopy = event.action
+        val xCopy = event.x
+        val yCopy = event.y
+
         try {
             if (inputManagerInstance == null || injectInputEventMethod == null) {
                 initHiddenApi()
             }
 
             if (inputManagerInstance != null && injectInputEventMethod != null) {
-                injectInputEventMethod?.invoke(inputManagerInstance, event, INJECT_INPUT_EVENT_MODE_WAIT_FOR_RESULT)
+                val res = injectInputEventMethod?.invoke(inputManagerInstance, event, INJECT_INPUT_EVENT_MODE_WAIT_FOR_RESULT)
+                success = (res as? Boolean) ?: true
             } else {
                 // Secondary fallback via HiddenApiBypass
                 val inputManagerClass = Class.forName("android.hardware.input.InputManager")
                 val im = HiddenApiBypass.invoke(inputManagerClass, null, "getInstance")
-                HiddenApiBypass.invoke(
+                val res = HiddenApiBypass.invoke(
                     inputManagerClass,
                     im,
                     "injectInputEvent",
                     event,
                     INJECT_INPUT_EVENT_MODE_WAIT_FOR_RESULT
                 )
+                success = (res as? Boolean) ?: true
             }
         } catch (t: Throwable) {
-            Log.e(TAG, "Failed injecting MotionEvent (${event.action}): ${t.message}")
+            Log.e(TAG, "Failed injecting MotionEvent ($actionCopy): ${t.message}")
+            success = false
         } finally {
+            if (diagnosticEventCounter < 20) {
+                diagnosticEventCounter++
+                val actionName = MotionEvent.actionToString(actionCopy)
+                val statusText = if (success) "BERHASIL" else "GAGAL"
+                Log.i(TAG, "injectInputEvent #$diagnosticEventCounter [$actionName pada ($xCopy, $yCopy)] -> $statusText")
+            }
             event.recycle()
         }
     }

@@ -8,4 +8,5 @@ interface IInputService {
     void moveHeld(float x, float y, int button);
     void release(float x, float y, int button);
     void scroll(float x, float y, int notches);
+    void resetDiagnostics();
 }

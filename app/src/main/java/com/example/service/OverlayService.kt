@@ -13,6 +13,7 @@ import android.os.Build
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
+import android.os.SystemClock
 import android.os.VibrationEffect
 import android.os.Vibrator
 import android.util.DisplayMetrics
@@ -41,12 +42,10 @@ import com.example.ui.overlay.CURSOR_TIP_OFFSET
 import com.example.ui.overlay.CURSOR_WINDOW_SIZE
 import com.example.ui.overlay.ControlPanel
 import com.example.ui.overlay.CursorCrosshair
-import com.example.ui.overlay.FloatingBubble
 import com.example.ui.overlay.InputMode
 import com.example.ui.overlay.PanelBehavior
 import com.example.ui.overlay.RecordMode
 import com.example.ui.overlay.SeparateDragHandle
-import com.example.ui.overlay.SettingsDialog
 import com.example.ui.overlay.TouchSettings
 import com.example.ui.theme.RightClickDashTheme
 import kotlin.math.hypot
@@ -62,12 +61,11 @@ class OverlayService : Service() {
         const val ACTION_STOP = "com.example.action.STOP"
         const val ACTION_SHOW = "com.example.action.SHOW"
         const val ACTION_HIDE = "com.example.action.HIDE"
-        const val ACTION_TOGGLE_RECORD_MODE = "com.example.action.TOGGLE_RECORD_MODE"
+        const val ACTION_TOGGLE_VISIBILITY = "com.example.action.TOGGLE_VISIBILITY"
         const val ACTION_TOGGLE_INPUT_MODE = "com.example.action.TOGGLE_INPUT_MODE"
 
         private const val PREFS_NAME = "right_click_dash_prefs"
         private const val KEY_RECORD_MODE = "KEY_RECORD_MODE"
-        private const val KEY_LAST_ACTIVE_RECORD_MODE = "KEY_LAST_ACTIVE_RECORD_MODE"
         private const val KEY_PANEL_BEHAVIOR = "KEY_PANEL_BEHAVIOR"
 
         @Volatile
@@ -84,26 +82,17 @@ class OverlayService : Service() {
     private var cursorView: ComposeView? = null
     private var cursorParams: WindowManager.LayoutParams? = null
 
-    // 2. Touchpad Virtual Overlays
+    // 2. Touchpad Virtual Overlays (Hanya ada di Mode Touchpad)
     private var panelView: ComposeView? = null
     private var panelParams: WindowManager.LayoutParams? = null
 
     private var handleView: ComposeView? = null
     private var handleParams: WindowManager.LayoutParams? = null
 
-    // 3. Mode Layar Sentuh: Fullscreen Capture Window
+    // 3. Mode Layar Sentuh: Fullscreen Capture Window (Hanya ada di Mode Layar Sentuh)
     private var fullscreenCaptureView: View? = null
     private var fullscreenCaptureParams: WindowManager.LayoutParams? = null
     private var isCaptureFlagNotTouchable = false
-
-    // 4. Floating Bubble Overlay (selalu interaktif di atas penangkap)
-    private var bubbleView: ComposeView? = null
-    private var bubbleParams: WindowManager.LayoutParams? = null
-
-    // 5. Settings Dialog Overlay
-    private var settingsDialogView: ComposeView? = null
-    private var settingsDialogParams: WindowManager.LayoutParams? = null
-    private val isSettingsDialogOpen = mutableStateOf(false)
 
     // Screen Dimensions
     private var screenWidth = 1080
@@ -116,7 +105,9 @@ class OverlayService : Service() {
     private val isHiddenState = mutableStateOf(false)
     private val heldButtonState = mutableIntStateOf(0)
     private val recordModeState = mutableStateOf(RecordMode.OFF)
-    private val panelBehaviorState = mutableStateOf(PanelBehavior.TEMBUS)
+
+    // Default "Perilaku panel" = Dinding
+    private val panelBehaviorState = mutableStateOf(PanelBehavior.DINDING)
     private val resetTouchpadTriggerState = mutableIntStateOf(0)
 
     // Mode Input & Gesture Settings (Default: Layar Sentuh)
@@ -156,18 +147,20 @@ class OverlayService : Service() {
             val isWithinDoubleTap = (touchDownTime - lastTapTime) <= touchSettingsState.value.doubleTapMs
             vibrateBrief()
             if (isWithinDoubleTap) {
-                // Jari menyentuh lagi dalam DOUBLE_TAP_MS: diam sampai LONG_PRESS -> pressDown(KANAN)
                 Log.i(TAG, "Mode Layar Sentuh: diam sampai LONG_PRESS setelah double tap -> pressDown KANAN")
                 heldButtonState.intValue = InputBackendManager.BUTTON_RIGHT
                 backendManager.pressDown(cursorXState.floatValue, cursorYState.floatValue, InputBackendManager.BUTTON_RIGHT)
             } else {
-                // Jari 1 menyentuh: tetap diam sampai LONG_PRESS -> pressDown(KIRI)
                 Log.i(TAG, "Mode Layar Sentuh: tetap diam sampai LONG_PRESS -> pressDown KIRI")
                 heldButtonState.intValue = InputBackendManager.BUTTON_LEFT
                 backendManager.pressDown(cursorXState.floatValue, cursorYState.floatValue, InputBackendManager.BUTTON_LEFT)
             }
         }
     }
+
+    // Diagnostik: Jumlah updateViewLayout per detik pada jendela kursor
+    private var cursorUpdateCount = 0
+    private var lastCursorFpsLogTime = 0L
 
     // State untuk Choreographer VSync Throttling (Kelancaran kursor overlay)
     private var isCursorFrameScheduled = false
@@ -176,13 +169,30 @@ class OverlayService : Service() {
         val cursorDensity = resources.displayMetrics.density
         val tipOffsetPx = CURSOR_TIP_OFFSET.value * cursorDensity
         cursorParams?.let { params ->
-            params.x = (cursorXState.floatValue - tipOffsetPx).toInt()
-            params.y = (cursorYState.floatValue - tipOffsetPx).toInt()
-            try {
-                if (cursorView != null && cursorView?.isAttachedToWindow == true) {
-                    windowManager.updateViewLayout(cursorView, params)
-                }
-            } catch (_: Throwable) {}
+            val targetX = (cursorXState.floatValue - tipOffsetPx).toInt()
+            val targetY = (cursorYState.floatValue - tipOffsetPx).toInt()
+            if (params.x != targetX || params.y != targetY) {
+                params.x = targetX
+                params.y = targetY
+                try {
+                    if (cursorView != null && cursorView?.isAttachedToWindow == true) {
+                        windowManager.updateViewLayout(cursorView, params)
+                        cursorUpdateCount++
+                    }
+                } catch (_: Throwable) {}
+            }
+        }
+
+        // Catat jumlah updateViewLayout per detik pada jendela kursor ke log "RCD"
+        val now = SystemClock.uptimeMillis()
+        if (now - lastCursorFpsLogTime >= 1000L) {
+            if (lastCursorFpsLogTime != 0L) {
+                val elapsed = (now - lastCursorFpsLogTime).coerceAtLeast(1L)
+                val rate = cursorUpdateCount * 1000f / elapsed
+                Log.d(TAG, "Jendela kursor: %.1f updateViewLayout / detik".format(rate))
+            }
+            cursorUpdateCount = 0
+            lastCursorFpsLogTime = now
         }
     }
 
@@ -212,28 +222,35 @@ class OverlayService : Service() {
         }
         recordModeState.value = initialRecordMode
 
-        val savedBehaviorName = prefs.getString(KEY_PANEL_BEHAVIOR, PanelBehavior.TEMBUS.name)
+        // Default "Perilaku panel" = DINDING
+        val savedBehaviorName = prefs.getString(KEY_PANEL_BEHAVIOR, PanelBehavior.DINDING.name)
         val initialBehavior = try {
-            PanelBehavior.valueOf(savedBehaviorName ?: PanelBehavior.TEMBUS.name)
+            PanelBehavior.valueOf(savedBehaviorName ?: PanelBehavior.DINDING.name)
         } catch (_: Exception) {
-            PanelBehavior.TEMBUS
+            PanelBehavior.DINDING
         }
         panelBehaviorState.value = initialBehavior
 
-        Log.i(TAG, "OverlayService onCreate: Mode Input=${loadedSettings.inputMode.name}, Mode Rekam=${initialRecordMode.name}")
+        Log.i(TAG, "OverlayService onCreate: Mode Input=${loadedSettings.inputMode.name}, Perilaku Panel=${initialBehavior.name}")
+        val backendState = backendManager.backendState.value
+        Log.i(TAG, "Backend aktif saat inisialisasi: ${backendState.type.name} (${backendState.status.name})")
 
         createNotificationChannel()
         startForeground(NOTIFICATION_ID, buildNotification(isHidden = false))
 
         initCursorOverlay()
-        initControlPanelOverlay()
-        initHandleOverlay()
-        initFullscreenCaptureOverlay()
-        initBubbleOverlay()
-        initSettingsDialogOverlay()
+
+        // Pasang jendela sesuai mode aktif
+        if (loadedSettings.inputMode == InputMode.TOUCHSCREEN) {
+            initFullscreenCaptureOverlay()
+            backendManager.resetDiagnostics()
+        } else {
+            initControlPanelOverlay()
+            initHandleOverlay()
+            backendManager.resetDiagnostics()
+        }
 
         applyRecordMode(initialRecordMode, saveToPrefs = false)
-        applyInputMode(loadedSettings.inputMode, centerCursor = true, saveToPrefs = false)
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -243,16 +260,18 @@ class OverlayService : Service() {
                 stopSelf()
                 return START_NOT_STICKY
             }
+            ACTION_TOGGLE_VISIBILITY -> {
+                if (isHiddenState.value) {
+                    showOverlayViews()
+                } else {
+                    hideOverlayViews()
+                }
+            }
             ACTION_SHOW -> {
-                Log.i(TAG, "Menerima aksi ACTION_SHOW")
                 showOverlayViews()
             }
             ACTION_HIDE -> {
-                Log.i(TAG, "Menerima aksi ACTION_HIDE")
                 hideOverlayViews()
-            }
-            ACTION_TOGGLE_RECORD_MODE -> {
-                toggleRecordModeFromNotification()
             }
             ACTION_TOGGLE_INPUT_MODE -> {
                 val current = touchSettingsState.value.inputMode
@@ -277,7 +296,6 @@ class OverlayService : Service() {
 
         scheduleCursorWindowUpdate()
         clampAndUpdateOverlays()
-        clampBubblePosition()
     }
 
     private fun readScreenDimensions() {
@@ -295,7 +313,6 @@ class OverlayService : Service() {
             screenWidth = metrics.widthPixels
             screenHeight = metrics.heightPixels
         }
-        Log.d(TAG, "readScreenDimensions: screenWidth=$screenWidth, screenHeight=$screenHeight")
     }
 
     private fun vibrateBrief() {
@@ -313,7 +330,14 @@ class OverlayService : Service() {
         }
     }
 
+    private fun logWindowFlagChange(windowName: String, oldFlags: Int, newFlags: Int) {
+        if (oldFlags != newFlags) {
+            Log.i(TAG, "Perubahan flag jendela [$windowName]: lama=0x${Integer.toHexString(oldFlags)} -> baru=0x${Integer.toHexString(newFlags)}")
+        }
+    }
+
     private fun initCursorOverlay() {
+        if (cursorView != null) return
         val cursorDensity = resources.displayMetrics.density
         val cursorSizePx = (CURSOR_WINDOW_SIZE.value * cursorDensity).toInt()
         val tipOffsetPx = CURSOR_TIP_OFFSET.value * cursorDensity
@@ -347,12 +371,14 @@ class OverlayService : Service() {
 
         try {
             windowManager.addView(cursorView, cursorParams)
+            logWindowFlagChange("cursorView", 0, cursorParams?.flags ?: 0)
         } catch (t: Throwable) {
             Log.e(TAG, "Failed adding cursor overlay: ${t.message}")
         }
     }
 
     private fun initControlPanelOverlay() {
+        if (panelView != null) return
         val density = resources.displayMetrics.density
         val panelW = minOf((screenWidth * 0.9f).toInt(), (340 * density).toInt())
 
@@ -382,16 +408,17 @@ class OverlayService : Service() {
             setViewTreeLifecycleOwner(lifecycleOwner)
             setViewTreeViewModelStoreOwner(lifecycleOwner)
             setViewTreeSavedStateRegistryOwner(lifecycleOwner)
-            addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ ->
-                clampAndUpdateOverlays()
-            }
 
+            // Event bertipe mouse (hasil suntikan) tidak boleh diteruskan ke touchpad!
             setOnTouchListener { _, event ->
+                if (event.getToolType(0) == MotionEvent.TOOL_TYPE_MOUSE) {
+                    return@setOnTouchListener true
+                }
                 when (event.actionMasked) {
                     MotionEvent.ACTION_DOWN -> onPanelTouchStart()
                     MotionEvent.ACTION_UP -> onPanelTouchEnd(isCancel = false)
                     MotionEvent.ACTION_CANCEL -> {
-                        Log.w(TAG, "ACTION_CANCEL terdeteksi pada panelView!")
+                        Log.w(TAG, "ACTION_CANCEL terdeteksi pada [panelView]!")
                         onPanelTouchEnd(isCancel = true)
                     }
                 }
@@ -423,7 +450,7 @@ class OverlayService : Service() {
                         onSelectRecordMode = { applyRecordMode(it) },
                         onSelectPanelBehavior = { applyPanelBehavior(it) },
                         onSelectInputMode = { applyInputMode(it, centerCursor = true, saveToPrefs = true) },
-                        onOpenSettings = { isSettingsDialogOpen.value = true },
+                        onOpenSettings = { openSettingsInActivity() },
                         onTouchStart = { onPanelTouchStart() },
                         onTouchEnd = { isCancel -> onPanelTouchEnd(isCancel) },
                         onClickLeft = {
@@ -455,12 +482,14 @@ class OverlayService : Service() {
 
         try {
             windowManager.addView(panelView, panelParams)
+            logWindowFlagChange("panelView", 0, panelParams?.flags ?: 0)
         } catch (t: Throwable) {
             Log.e(TAG, "Failed adding panel overlay: ${t.message}")
         }
     }
 
     private fun initHandleOverlay() {
+        if (handleView != null) return
         val density = resources.displayMetrics.density
         val handleW = (140 * density).toInt()
         val handleH = (32 * density).toInt()
@@ -504,15 +533,34 @@ class OverlayService : Service() {
 
         try {
             windowManager.addView(handleView, handleParams)
+            logWindowFlagChange("handleView", 0, handleParams?.flags ?: 0)
         } catch (t: Throwable) {
             Log.e(TAG, "Failed adding handle overlay: ${t.message}")
         }
     }
 
-    /**
-     * Inisialisasi Jendela Penangkap Layar Penuh untuk Mode Layar Sentuh.
-     */
+    private fun removeControlPanelOverlay() {
+        panelView?.let {
+            try {
+                windowManager.removeView(it)
+            } catch (_: Throwable) {}
+        }
+        panelView = null
+        panelParams = null
+    }
+
+    private fun removeHandleOverlay() {
+        handleView?.let {
+            try {
+                windowManager.removeView(it)
+            } catch (_: Throwable) {}
+        }
+        handleView = null
+        handleParams = null
+    }
+
     private fun initFullscreenCaptureOverlay() {
+        if (fullscreenCaptureView != null) return
         fullscreenCaptureParams = WindowManager.LayoutParams().apply {
             type = WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
             flags = WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
@@ -526,21 +574,34 @@ class OverlayService : Service() {
 
         val capture = View(this)
         capture.setOnTouchListener { _, event ->
+            if (event.getToolType(0) == MotionEvent.TOOL_TYPE_MOUSE) {
+                return@setOnTouchListener true
+            }
             handleFullscreenTouchEvent(event)
         }
 
         fullscreenCaptureView = capture
         try {
             windowManager.addView(fullscreenCaptureView, fullscreenCaptureParams)
-            Log.i(TAG, "Fullscreen capture overlay berhasil ditambahkan.")
+            isCaptureFlagNotTouchable = false
+            logWindowFlagChange("fullscreenCaptureView", 0, fullscreenCaptureParams?.flags ?: 0)
+            Log.i(TAG, "Fullscreen capture overlay berhasil dipasang.")
         } catch (t: Throwable) {
             Log.e(TAG, "Failed adding fullscreen capture overlay: ${t.message}")
         }
     }
 
-    /**
-     * Memasang atau melepas FLAG_NOT_TOUCHABLE pada fullscreenCaptureView untuk Mode TEMBUS.
-     */
+    private fun removeFullscreenCaptureOverlay() {
+        fullscreenCaptureView?.let {
+            try {
+                windowManager.removeView(it)
+            } catch (_: Throwable) {}
+        }
+        fullscreenCaptureView = null
+        fullscreenCaptureParams = null
+        isCaptureFlagNotTouchable = false
+    }
+
     private fun setCaptureFlagNotTouchable(notTouchable: Boolean) {
         val params = fullscreenCaptureParams ?: return
         val view = fullscreenCaptureView ?: return
@@ -557,17 +618,13 @@ class OverlayService : Service() {
             try {
                 windowManager.updateViewLayout(view, params)
                 isCaptureFlagNotTouchable = notTouchable
-                val action = if (notTouchable) "dipasang pada" else "dicabut dari"
-                Log.i(TAG, "Perubahan flag: FLAG_NOT_TOUCHABLE $action fullscreenCaptureView")
+                logWindowFlagChange("fullscreenCaptureView", oldFlags, params.flags)
             } catch (t: Throwable) {
                 Log.e(TAG, "Gagal updateViewLayout captureView FLAG_NOT_TOUCHABLE: ${t.message}")
             }
         }
     }
 
-    /**
-     * State Machine Penanganan Event Sentuhan pada Mode Layar Sentuh.
-     */
     private fun handleFullscreenTouchEvent(event: MotionEvent): Boolean {
         if (touchSettingsState.value.inputMode != InputMode.TOUCHSCREEN || isHiddenState.value) {
             return false
@@ -624,7 +681,6 @@ class OverlayService : Service() {
 
                             val isWithinDoubleTap = (touchDownTime - lastTapTime) <= settings.doubleTapMs
                             if (isWithinDoubleTap && heldButtonState.intValue == 0 && !isRightDragTriggered) {
-                                // Jari menyentuh lagi dalam DOUBLE_TAP_MS: bergeser > SLOP -> pressDown(KANAN)
                                 Log.i(TAG, "Mode Layar Sentuh: bergeser > SLOP dalam double tap window -> pressDown KANAN")
                                 isRightDragTriggered = true
                                 heldButtonState.intValue = InputBackendManager.BUTTON_RIGHT
@@ -723,7 +779,7 @@ class OverlayService : Service() {
             }
 
             MotionEvent.ACTION_CANCEL -> {
-                Log.w(TAG, "ACTION_CANCEL terdeteksi pada fullscreenCaptureView!")
+                Log.w(TAG, "ACTION_CANCEL terdeteksi pada [fullscreenCaptureView]!")
                 mainHandler.removeCallbacks(longPressRunnable)
                 if (heldButtonState.intValue != 0) {
                     backendManager.release(cursorXState.floatValue, cursorYState.floatValue, heldButtonState.intValue)
@@ -738,158 +794,22 @@ class OverlayService : Service() {
         return false
     }
 
-    /**
-     * Inisialisasi Floating Bubble kecil (selalu bisa disentuh di atas penangkap).
-     */
-    private fun initBubbleOverlay() {
-        val density = resources.displayMetrics.density
-        val sizePx = (52 * density).toInt()
-
-        bubbleParams = WindowManager.LayoutParams().apply {
-            type = WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
-            flags = WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
-                    WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN
-            if (recordModeState.value == RecordMode.SECURE) {
-                flags = flags or WindowManager.LayoutParams.FLAG_SECURE
-            }
-            format = PixelFormat.TRANSLUCENT
-            width = sizePx
-            height = sizePx
-            gravity = Gravity.TOP or Gravity.START
-            x = (screenWidth - sizePx - (16 * density).toInt()).coerceAtLeast(10)
-            y = (screenHeight * 0.20f).toInt()
+    private fun openSettingsInActivity() {
+        val intent = Intent(this, MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP
+            putExtra("OPEN_SETTINGS_DIALOG", true)
         }
-
-        bubbleView = ComposeView(this).apply {
-            setViewTreeLifecycleOwner(lifecycleOwner)
-            setViewTreeViewModelStoreOwner(lifecycleOwner)
-            setViewTreeSavedStateRegistryOwner(lifecycleOwner)
-            setContent {
-                RightClickDashTheme {
-                    val backendState by backendManager.backendState.collectAsState()
-
-                    FloatingBubble(
-                        backendState = backendState,
-                        inputMode = touchSettingsState.value.inputMode,
-                        recordMode = recordModeState.value,
-                        onToggleInputMode = { targetMode ->
-                            applyInputMode(targetMode, centerCursor = true, saveToPrefs = true)
-                        },
-                        onOpenSettings = {
-                            isSettingsDialogOpen.value = true
-                        },
-                        onRecheckBackend = {
-                            backendManager.recheckStatus()
-                        },
-                        onHideOverlay = {
-                            hideOverlayViews()
-                        },
-                        onDrag = { dx, dy ->
-                            dragBubble(dx, dy)
-                        }
-                    )
-                }
-            }
-        }
-
-        try {
-            windowManager.addView(bubbleView, bubbleParams)
-            Log.i(TAG, "Floating bubble overlay berhasil ditambahkan.")
-        } catch (t: Throwable) {
-            Log.e(TAG, "Failed adding floating bubble: ${t.message}")
-        }
-    }
-
-    private fun dragBubble(dx: Float, dy: Float) {
-        val bParams = bubbleParams ?: return
-        val density = resources.displayMetrics.density
-        val sizePx = (52 * density).toInt()
-        val maxX = (screenWidth - sizePx).coerceAtLeast(0)
-        val maxY = (screenHeight - sizePx).coerceAtLeast(0)
-
-        bParams.x = (bParams.x + dx.toInt()).coerceIn(0, maxX)
-        bParams.y = (bParams.y + dy.toInt()).coerceIn(0, maxY)
-
-        try {
-            if (bubbleView != null && bubbleView?.isAttachedToWindow == true) {
-                windowManager.updateViewLayout(bubbleView, bParams)
-            }
-        } catch (_: Throwable) {}
-    }
-
-    private fun clampBubblePosition() {
-        val bParams = bubbleParams ?: return
-        val density = resources.displayMetrics.density
-        val sizePx = (52 * density).toInt()
-        val maxX = (screenWidth - sizePx).coerceAtLeast(0)
-        val maxY = (screenHeight - sizePx).coerceAtLeast(0)
-
-        bParams.x = bParams.x.coerceIn(0, maxX)
-        bParams.y = bParams.y.coerceIn(0, maxY)
-
-        try {
-            if (bubbleView != null && bubbleView?.isAttachedToWindow == true) {
-                windowManager.updateViewLayout(bubbleView, bParams)
-            }
-        } catch (_: Throwable) {}
+        startActivity(intent)
     }
 
     /**
-     * Inisialisasi Overlay Dialog Pengaturan.
-     */
-    private fun initSettingsDialogOverlay() {
-        settingsDialogParams = WindowManager.LayoutParams().apply {
-            type = WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
-            flags = WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
-                    WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN
-            format = PixelFormat.TRANSLUCENT
-            width = WindowManager.LayoutParams.MATCH_PARENT
-            height = WindowManager.LayoutParams.MATCH_PARENT
-            gravity = Gravity.CENTER
-        }
-
-        settingsDialogView = ComposeView(this).apply {
-            setViewTreeLifecycleOwner(lifecycleOwner)
-            setViewTreeViewModelStoreOwner(lifecycleOwner)
-            setViewTreeSavedStateRegistryOwner(lifecycleOwner)
-            visibility = View.GONE
-            setContent {
-                RightClickDashTheme {
-                    if (isSettingsDialogOpen.value) {
-                        SettingsDialog(
-                            initialSettings = touchSettingsState.value,
-                            onDismissRequest = {
-                                isSettingsDialogOpen.value = false
-                                settingsDialogView?.visibility = View.GONE
-                            },
-                            onSaveSettings = { updated ->
-                                touchSettingsState.value = updated
-                                TouchSettings.save(applicationContext, updated)
-                                applyInputMode(updated.inputMode, centerCursor = false, saveToPrefs = false)
-                                showToast("Pengaturan disimpan")
-                            }
-                        )
-                    }
-                }
-            }
-        }
-
-        try {
-            windowManager.addView(settingsDialogView, settingsDialogParams)
-        } catch (t: Throwable) {
-            Log.e(TAG, "Failed adding settings dialog overlay: ${t.message}")
-        }
-    }
-
-    /**
-     * Memperbarui mode input aktif (Layar Sentuh vs Touchpad).
+     * Berpindah Mode Input:
+     * - Saat tersembunyi: hanya mengubah pilihan di SharedPreferences.
+     * - Saat tampil: lepaskan tombol tertahan, hapus jendela mode lama, pasang jendela mode baru tanpa restart service.
      */
     private fun applyInputMode(mode: InputMode, centerCursor: Boolean = false, saveToPrefs: Boolean = true) {
         val currentSettings = touchSettingsState.value
-        if (currentSettings.inputMode != mode) {
-            // Tombol tertahan WAJIB dilepas saat mode dialihkan
-            unlockButton()
-        }
+        val previousMode = currentSettings.inputMode
 
         val updated = currentSettings.copy(inputMode = mode)
         touchSettingsState.value = updated
@@ -897,34 +817,43 @@ class OverlayService : Service() {
             TouchSettings.save(this, updated)
         }
 
-        Log.i(TAG, "Menerapkan Mode Input: ${mode.name} (${mode.displayName})")
+        Log.i(TAG, "Pilihan Mode Input: ${mode.name} (${mode.displayName})")
+        val backendState = backendManager.backendState.value
+        Log.i(TAG, "Backend aktif: ${backendState.type.name} (${backendState.status.name})")
 
-        // Saat mode Layar Sentuh diaktifkan, kursor muncul di TENGAH layar
-        if (mode == InputMode.TOUCHSCREEN && centerCursor) {
-            cursorXState.floatValue = screenWidth / 2f
-            cursorYState.floatValue = screenHeight / 2f
-            scheduleCursorWindowUpdate()
+        // Jika sedang tersembunyi: hanya ubah pilihan, jangan pasang jendela
+        if (isHiddenState.value) {
+            updateNotification(isHidden = true)
+            showToast("Mode: ${mode.displayName} (disimpan)")
+            return
         }
 
-        if (!isHiddenState.value) {
-            if (mode == InputMode.TOUCHSCREEN) {
-                // Sembunyikan panel & handle lama
-                panelView?.visibility = View.GONE
-                handleView?.visibility = View.GONE
-                // Tampilkan penangkap layar penuh & bubble
-                fullscreenCaptureView?.visibility = View.VISIBLE
-                bubbleView?.visibility = View.VISIBLE
-            } else {
-                // Tampilkan panel & handle touchpad lama
-                fullscreenCaptureView?.visibility = View.GONE
-                panelView?.visibility = View.VISIBLE
-                handleView?.visibility = View.VISIBLE
-                bubbleView?.visibility = View.VISIBLE
+        // Sedang tampil: lepaskan tombol tertahan, hapus jendela mode lama, pasang jendela mode baru
+        unlockButton()
+
+        if (previousMode == InputMode.TOUCHPAD) {
+            removeControlPanelOverlay()
+            removeHandleOverlay()
+        } else {
+            removeFullscreenCaptureOverlay()
+        }
+
+        if (mode == InputMode.TOUCHSCREEN) {
+            initFullscreenCaptureOverlay()
+            if (centerCursor) {
+                cursorXState.floatValue = screenWidth / 2f
+                cursorYState.floatValue = screenHeight / 2f
+                scheduleCursorWindowUpdate()
             }
+            backendManager.resetDiagnostics()
+        } else {
+            initControlPanelOverlay()
+            initHandleOverlay()
+            backendManager.resetDiagnostics()
         }
 
-        updateNotification(isHiddenState.value)
-        showToast("Mode Input: ${mode.displayName}")
+        updateNotification(isHidden = false)
+        showToast("Mode: ${mode.displayName}")
     }
 
     private fun scheduleCursorWindowUpdate() {
@@ -1009,7 +938,6 @@ class OverlayService : Service() {
         // Kelancaran: Posisi kursor diperbarui paling banyak sekali per frame (Choreographer)
         scheduleCursorWindowUpdate()
 
-        // Kirim event gerak ke backend thread (akan di-coalesce di InputServiceImpl)
         val held = heldButtonState.intValue
         if (held != 0) {
             backendManager.moveHeld(clampedX, clampedY, held)
@@ -1049,9 +977,6 @@ class OverlayService : Service() {
     }
 
     private fun applyFlagNotTouchable(notTouchable: Boolean) {
-        var panelChanged = false
-        var handleChanged = false
-
         panelParams?.let { pParams ->
             val oldFlags = pParams.flags
             pParams.flags = if (notTouchable) {
@@ -1062,7 +987,7 @@ class OverlayService : Service() {
             if (pParams.flags != oldFlags && panelView != null && panelView?.isAttachedToWindow == true) {
                 try {
                     windowManager.updateViewLayout(panelView, pParams)
-                    panelChanged = true
+                    logWindowFlagChange("panelView", oldFlags, pParams.flags)
                 } catch (t: Throwable) {
                     Log.e(TAG, "Gagal updateViewLayout panelView FLAG_NOT_TOUCHABLE=$notTouchable: ${t.message}")
                 }
@@ -1079,16 +1004,11 @@ class OverlayService : Service() {
             if (hParams.flags != oldFlags && handleView != null && handleView?.isAttachedToWindow == true) {
                 try {
                     windowManager.updateViewLayout(handleView, hParams)
-                    handleChanged = true
+                    logWindowFlagChange("handleView", oldFlags, hParams.flags)
                 } catch (t: Throwable) {
                     Log.e(TAG, "Gagal updateViewLayout handleView FLAG_NOT_TOUCHABLE=$notTouchable: ${t.message}")
                 }
             }
-        }
-
-        if (panelChanged || handleChanged) {
-            val actionName = if (notTouchable) "dipasang pada" else "dicabut dari"
-            Log.i(TAG, "Perubahan flag: FLAG_NOT_TOUCHABLE $actionName jendela panel dan handle")
         }
     }
 
@@ -1096,7 +1016,6 @@ class OverlayService : Service() {
         if (isFlagNotTouchableSet) {
             isFlagNotTouchableSet = false
             applyFlagNotTouchable(false)
-            Log.i(TAG, "Perubahan flag: FLAG_NOT_TOUCHABLE berhasil dipulihkan (interaktif kembali)")
         }
     }
 
@@ -1118,9 +1037,6 @@ class OverlayService : Service() {
         if (saveToPrefs) {
             val prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
             prefs.edit().putString(KEY_RECORD_MODE, mode.name).apply()
-            if (mode != RecordMode.OFF) {
-                prefs.edit().putString(KEY_LAST_ACTIVE_RECORD_MODE, mode.name).apply()
-            }
         }
 
         Log.i(TAG, "Menerapkan Mode Rekam: ${mode.name} (${mode.displayName})")
@@ -1136,6 +1052,7 @@ class OverlayService : Service() {
             if (panelView != null && panelView?.isAttachedToWindow == true && pParams.flags != oldFlags) {
                 try {
                     windowManager.updateViewLayout(panelView, pParams)
+                    logWindowFlagChange("panelView", oldFlags, pParams.flags)
                 } catch (_: Throwable) {}
             }
         }
@@ -1150,55 +1067,25 @@ class OverlayService : Service() {
             if (handleView != null && handleView?.isAttachedToWindow == true && hParams.flags != oldFlags) {
                 try {
                     windowManager.updateViewLayout(handleView, hParams)
+                    logWindowFlagChange("handleView", oldFlags, hParams.flags)
                 } catch (_: Throwable) {}
             }
         }
 
-        bubbleParams?.let { bParams ->
-            val oldFlags = bParams.flags
-            bParams.flags = if (isSecure) {
-                bParams.flags or WindowManager.LayoutParams.FLAG_SECURE
-            } else {
-                bParams.flags and WindowManager.LayoutParams.FLAG_SECURE.inv()
-            }
-            if (bubbleView != null && bubbleView?.isAttachedToWindow == true && bParams.flags != oldFlags) {
-                try {
-                    windowManager.updateViewLayout(bubbleView, bParams)
-                } catch (_: Throwable) {}
-            }
-        }
-
-        // Kursor overlay TIDAK diberi FLAG_SECURE
         cursorParams?.let { cParams ->
+            val oldFlags = cParams.flags
             if ((cParams.flags and WindowManager.LayoutParams.FLAG_SECURE) != 0) {
                 cParams.flags = cParams.flags and WindowManager.LayoutParams.FLAG_SECURE.inv()
-                if (cursorView != null && cursorView?.isAttachedToWindow == true) {
+                if (cursorView != null && cursorView?.isAttachedToWindow == true && cParams.flags != oldFlags) {
                     try {
                         windowManager.updateViewLayout(cursorView, cParams)
+                        logWindowFlagChange("cursorView", oldFlags, cParams.flags)
                     } catch (_: Throwable) {}
                 }
             }
         }
 
         updateNotification(isHiddenState.value)
-        showToast("Mode Rekam: ${mode.displayName}")
-    }
-
-    private fun toggleRecordModeFromNotification() {
-        val prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        if (recordModeState.value == RecordMode.OFF) {
-            val lastActiveName = prefs.getString(KEY_LAST_ACTIVE_RECORD_MODE, RecordMode.SECURE.name)
-            val targetMode = try {
-                RecordMode.valueOf(lastActiveName ?: RecordMode.SECURE.name)
-            } catch (_: Exception) {
-                RecordMode.SECURE
-            }
-            Log.i(TAG, "Notifikasi: Mengaktifkan Mode Rekam -> ${targetMode.name}")
-            applyRecordMode(targetMode)
-        } else {
-            Log.i(TAG, "Notifikasi: Menonaktifkan Mode Rekam -> OFF")
-            applyRecordMode(RecordMode.OFF)
-        }
     }
 
     private fun lockButton(button: Int) {
@@ -1226,6 +1113,10 @@ class OverlayService : Service() {
         }
     }
 
+    /**
+     * Mengatur posisi panel dan handle HANYA saat digeser atau saat rotasi layar.
+     * Tidak dipanggil berulang di setiap event sentuhan biasa untuk mencegah getaran pada touchpad.
+     */
     private fun setPanelAndHandlePosition(newX: Int, newY: Int) {
         val density = resources.displayMetrics.density
         val gapPx = (10 * density).toInt()
@@ -1245,23 +1136,29 @@ class OverlayService : Service() {
         val clampedY = newY.coerceIn(0, maxY)
 
         panelParams?.let { pParams ->
-            pParams.x = clampedX
-            pParams.y = clampedY
-            try {
-                if (panelView != null && panelView?.isAttachedToWindow == true) {
-                    windowManager.updateViewLayout(panelView, pParams)
-                }
-            } catch (_: Throwable) {}
+            if (pParams.x != clampedX || pParams.y != clampedY) {
+                pParams.x = clampedX
+                pParams.y = clampedY
+                try {
+                    if (panelView != null && panelView?.isAttachedToWindow == true) {
+                        windowManager.updateViewLayout(panelView, pParams)
+                    }
+                } catch (_: Throwable) {}
+            }
         }
 
         handleParams?.let { hParams ->
-            hParams.x = clampedX + (panelW - handleW) / 2
-            hParams.y = clampedY + panelH + gapPx
-            try {
-                if (handleView != null && handleView?.isAttachedToWindow == true) {
-                    windowManager.updateViewLayout(handleView, hParams)
-                }
-            } catch (_: Throwable) {}
+            val targetHX = clampedX + (panelW - handleW) / 2
+            val targetHY = clampedY + panelH + gapPx
+            if (hParams.x != targetHX || hParams.y != targetHY) {
+                hParams.x = targetHX
+                hParams.y = targetHY
+                try {
+                    if (handleView != null && handleView?.isAttachedToWindow == true) {
+                        windowManager.updateViewLayout(handleView, hParams)
+                    }
+                } catch (_: Throwable) {}
+            }
         }
     }
 
@@ -1288,12 +1185,12 @@ class OverlayService : Service() {
         setCaptureFlagNotTouchable(false)
 
         isHiddenState.value = true
+
+        // Sembunyikan semua jendela
         cursorView?.visibility = View.GONE
         panelView?.visibility = View.GONE
         handleView?.visibility = View.GONE
         fullscreenCaptureView?.visibility = View.GONE
-        bubbleView?.visibility = View.GONE
-        settingsDialogView?.visibility = View.GONE
 
         updateNotification(isHidden = true)
         Log.i(TAG, "Overlay disembunyikan")
@@ -1302,26 +1199,28 @@ class OverlayService : Service() {
 
     private fun showOverlayViews() {
         readScreenDimensions()
-        clampAndUpdateOverlays()
-        clampBubblePosition()
-
         isHiddenState.value = false
+
+        initCursorOverlay()
         cursorView?.visibility = View.VISIBLE
 
-        if (touchSettingsState.value.inputMode == InputMode.TOUCHSCREEN) {
-            panelView?.visibility = View.GONE
-            handleView?.visibility = View.GONE
+        val currentMode = touchSettingsState.value.inputMode
+        if (currentMode == InputMode.TOUCHSCREEN) {
+            removeControlPanelOverlay()
+            removeHandleOverlay()
+            initFullscreenCaptureOverlay()
             fullscreenCaptureView?.visibility = View.VISIBLE
-            bubbleView?.visibility = View.VISIBLE
         } else {
-            fullscreenCaptureView?.visibility = View.GONE
+            removeFullscreenCaptureOverlay()
+            initControlPanelOverlay()
+            initHandleOverlay()
             panelView?.visibility = View.VISIBLE
             handleView?.visibility = View.VISIBLE
-            bubbleView?.visibility = View.VISIBLE
+            clampAndUpdateOverlays()
         }
 
         updateNotification(isHidden = false)
-        Log.i(TAG, "Overlay ditampilkan kembali")
+        Log.i(TAG, "Overlay ditampilkan kembali (Mode: ${currentMode.displayName})")
         showToast("Overlay ditampilkan kembali")
     }
 
@@ -1344,6 +1243,12 @@ class OverlayService : Service() {
         }
     }
 
+    /**
+     * Notifikasi foreground memakai MAKSIMAL 3 AKSI:
+     * 1. [Sembunyikan/Tampilkan]: satu tombol, label berganti sesuai status.
+     * 2. [Mode: Sentuh/Touchpad]: berganti mode input, label menunjukkan mode saat ini.
+     * 3. [Stop].
+     */
     private fun buildNotification(isHidden: Boolean): Notification {
         val openAppIntent = Intent(this, MainActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_SINGLE_TOP
@@ -1353,65 +1258,42 @@ class OverlayService : Service() {
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
         )
 
-        val toggleAction = if (isHidden) {
-            val showIntent = Intent(this, OverlayService::class.java).apply { action = ACTION_SHOW }
-            val showPending = PendingIntent.getService(
-                this, 1, showIntent,
-                PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
-            )
-            NotificationCompat.Action.Builder(
-                android.R.drawable.ic_menu_view,
-                "Tampilkan",
-                showPending
-            ).build()
-        } else {
-            val hideIntent = Intent(this, OverlayService::class.java).apply { action = ACTION_HIDE }
-            val hidePending = PendingIntent.getService(
-                this, 2, hideIntent,
-                PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
-            )
-            NotificationCompat.Action.Builder(
-                android.R.drawable.ic_menu_close_clear_cancel,
-                "Sembunyikan",
-                hidePending
-            ).build()
+        // Aksi 1: [Sembunyikan/Tampilkan]
+        val toggleVisibilityIntent = Intent(this, OverlayService::class.java).apply {
+            action = ACTION_TOGGLE_VISIBILITY
         }
-
-        // Action ganti Mode Input
-        val currentInputMode = touchSettingsState.value.inputMode
-        val inputModeToggleIntent = Intent(this, OverlayService::class.java).apply { action = ACTION_TOGGLE_INPUT_MODE }
-        val inputModePending = PendingIntent.getService(
-            this, 5, inputModeToggleIntent,
+        val toggleVisibilityPending = PendingIntent.getService(
+            this, 1, toggleVisibilityIntent,
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
         )
-        val inputModeActionTitle = if (currentInputMode == InputMode.TOUCHSCREEN) "Ke Touchpad" else "Ke Layar Sentuh"
-        val inputModeAction = NotificationCompat.Action.Builder(
+        val visibilityActionTitle = if (isHidden) "Tampilkan" else "Sembunyikan"
+        val visibilityActionIcon = if (isHidden) android.R.drawable.ic_menu_view else android.R.drawable.ic_menu_close_clear_cancel
+        val visibilityAction = NotificationCompat.Action.Builder(
+            visibilityActionIcon,
+            visibilityActionTitle,
+            toggleVisibilityPending
+        ).build()
+
+        // Aksi 2: [Mode: Sentuh/Touchpad] (label menunjukkan mode saat ini)
+        val currentInputMode = touchSettingsState.value.inputMode
+        val inputModeToggleIntent = Intent(this, OverlayService::class.java).apply {
+            action = ACTION_TOGGLE_INPUT_MODE
+        }
+        val inputModePending = PendingIntent.getService(
+            this, 2, inputModeToggleIntent,
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+        )
+        val modeActionTitle = if (currentInputMode == InputMode.TOUCHSCREEN) "Mode: Sentuh" else "Mode: Touchpad"
+        val modeAction = NotificationCompat.Action.Builder(
             android.R.drawable.ic_menu_compass,
-            inputModeActionTitle,
+            modeActionTitle,
             inputModePending
         ).build()
 
-        val currentMode = recordModeState.value
-        val recordToggleIntent = Intent(this, OverlayService::class.java).apply { action = ACTION_TOGGLE_RECORD_MODE }
-        val recordPending = PendingIntent.getService(
-            this, 4, recordToggleIntent,
-            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
-        )
-        val recordActionTitle = if (currentMode == RecordMode.OFF) {
-            val prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-            val lastMode = prefs.getString(KEY_LAST_ACTIVE_RECORD_MODE, RecordMode.SECURE.name)
-            val label = if (lastMode == RecordMode.TRANSPARENT.name) "Transparan" else "Sembunyikan"
-            "Rekam: $label"
-        } else {
-            "Rekam: OFF"
+        // Aksi 3: [Stop]
+        val stopIntent = Intent(this, OverlayService::class.java).apply {
+            action = ACTION_STOP
         }
-        val recordAction = NotificationCompat.Action.Builder(
-            android.R.drawable.ic_menu_camera,
-            recordActionTitle,
-            recordPending
-        ).build()
-
-        val stopIntent = Intent(this, OverlayService::class.java).apply { action = ACTION_STOP }
         val stopPending = PendingIntent.getService(
             this, 3, stopIntent,
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
@@ -1422,10 +1304,8 @@ class OverlayService : Service() {
             stopPending
         ).build()
 
-        val modeBadge = if (currentMode != RecordMode.OFF) " [${currentMode.displayName}]" else ""
-
         return NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle("RightClickDash [${currentInputMode.displayName}]$modeBadge")
+            .setContentTitle("RightClickDash [${currentInputMode.displayName}]")
             .setContentText(
                 if (isHidden) "Overlay tersembunyi"
                 else "Kursor di X: ${cursorXState.floatValue.toInt()}, Y: ${cursorYState.floatValue.toInt()}"
@@ -1433,9 +1313,8 @@ class OverlayService : Service() {
             .setSmallIcon(R.mipmap.ic_launcher)
             .setContentIntent(openPendingIntent)
             .setOngoing(true)
-            .addAction(toggleAction)
-            .addAction(inputModeAction)
-            .addAction(recordAction)
+            .addAction(visibilityAction)
+            .addAction(modeAction)
             .addAction(stopAction)
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .build()
@@ -1461,40 +1340,9 @@ class OverlayService : Service() {
         }
         cursorView = null
 
-        panelView?.let {
-            try {
-                windowManager.removeView(it)
-            } catch (_: Throwable) {}
-        }
-        panelView = null
-
-        handleView?.let {
-            try {
-                windowManager.removeView(it)
-            } catch (_: Throwable) {}
-        }
-        handleView = null
-
-        fullscreenCaptureView?.let {
-            try {
-                windowManager.removeView(it)
-            } catch (_: Throwable) {}
-        }
-        fullscreenCaptureView = null
-
-        bubbleView?.let {
-            try {
-                windowManager.removeView(it)
-            } catch (_: Throwable) {}
-        }
-        bubbleView = null
-
-        settingsDialogView?.let {
-            try {
-                windowManager.removeView(it)
-            } catch (_: Throwable) {}
-        }
-        settingsDialogView = null
+        removeControlPanelOverlay()
+        removeHandleOverlay()
+        removeFullscreenCaptureOverlay()
 
         lifecycleOwner.onDestroy()
         Log.i(TAG, "OverlayService onDestroy selesai")

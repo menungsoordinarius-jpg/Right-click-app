@@ -48,6 +48,10 @@ class ShizukuUserService : IInputService.Stub {
         delegate.scroll(x, y, notches)
     }
 
+    override fun resetDiagnostics() {
+        delegate.resetDiagnostics()
+    }
+
     /**
      * Called when Shizuku UserService is destroyed
      */

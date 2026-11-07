@@ -670,4 +670,15 @@ class InputBackendManager private constructor(private val appContext: Context) {
             false
         }
     }
+
+    fun resetDiagnostics() {
+        val service = inputService
+        if (service != null) {
+            try {
+                service.resetDiagnostics()
+            } catch (t: Throwable) {
+                Log.d(TAG, "resetDiagnostics error: ${t.message}")
+            }
+        }
+    }
 }
