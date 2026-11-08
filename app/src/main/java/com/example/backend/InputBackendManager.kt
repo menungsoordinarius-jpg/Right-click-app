@@ -544,17 +544,18 @@ class InputBackendManager private constructor(private val appContext: Context) {
     // Input actions
     fun click(x: Float, y: Float, button: Int = BUTTON_LEFT): Boolean {
         val service = inputService
+        val buttonName = if (button == BUTTON_LEFT) "KIRI" else "KANAN"
         return if (service != null) {
             try {
-                Log.d(TAG, "click($x, $y, button=$button) dikirim ke InputService")
                 service.click(x, y, button)
+                Log.i(TAG, "click $buttonName pada ($x, $y) -> BERHASIL")
                 true
             } catch (t: Throwable) {
-                Log.e(TAG, "IPC click error: ${t.message}", t)
+                Log.e(TAG, "click $buttonName pada ($x, $y) -> GAGAL (${t.message})", t)
                 false
             }
         } else {
-            Log.w(TAG, "InputService belum terhubung saat click($x, $y, $button)")
+            Log.w(TAG, "click $buttonName pada ($x, $y) -> GAGAL (InputService belum terhubung)")
             false
         }
     }

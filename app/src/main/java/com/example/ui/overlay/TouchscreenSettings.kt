@@ -4,12 +4,12 @@ import android.content.Context
 import android.content.SharedPreferences
 
 enum class InputMode(val displayName: String) {
-    TOUCHSCREEN("Layar Sentuh"),
+    TOUCHSCREEN("Layar Sentuh (eksperimen)"),
     TOUCHPAD("Touchpad")
 }
 
 data class TouchSettings(
-    val inputMode: InputMode = InputMode.TOUCHSCREEN,
+    val inputMode: InputMode = InputMode.TOUCHPAD,
     val longPressMs: Long = 350L,
     val doubleTapMs: Long = 300L,
     val tapMaxMs: Long = 250L,
@@ -35,11 +35,11 @@ data class TouchSettings(
 
         fun load(context: Context): TouchSettings {
             val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-            val modeStr = prefs.getString(KEY_INPUT_MODE, InputMode.TOUCHSCREEN.name)
+            val modeStr = prefs.getString(KEY_INPUT_MODE, InputMode.TOUCHPAD.name)
             val mode = try {
-                InputMode.valueOf(modeStr ?: InputMode.TOUCHSCREEN.name)
+                InputMode.valueOf(modeStr ?: InputMode.TOUCHPAD.name)
             } catch (_: Exception) {
-                InputMode.TOUCHSCREEN
+                InputMode.TOUCHPAD
             }
 
             return TouchSettings(

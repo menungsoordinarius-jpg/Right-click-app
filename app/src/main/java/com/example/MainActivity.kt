@@ -711,7 +711,7 @@ fun InputModeCard(
                         )
                         Spacer(modifier = Modifier.width(6.dp))
                         Text(
-                            text = "Layar Sentuh (Bawaan)",
+                            text = "Layar Sentuh (eksperimen)",
                             fontWeight = FontWeight.Bold,
                             fontSize = 11.sp,
                             color = if (isTouchscreen) Color.Black else TextSecondary
@@ -739,7 +739,7 @@ fun InputModeCard(
                         )
                         Spacer(modifier = Modifier.width(6.dp))
                         Text(
-                            text = "Touchpad Virtual",
+                            text = "Touchpad Virtual (Bawaan)",
                             fontWeight = FontWeight.Bold,
                             fontSize = 11.sp,
                             color = if (isTouchpad) Color.Black else TextSecondary

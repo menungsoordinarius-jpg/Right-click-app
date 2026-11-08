@@ -151,7 +151,7 @@ fun SettingsDialog(
                                     )
                                     Spacer(modifier = Modifier.width(6.dp))
                                     Text(
-                                        text = "Layar Sentuh (Bawaan)",
+                                        text = "Layar Sentuh (eksperimen)",
                                         fontSize = 11.sp,
                                         fontWeight = FontWeight.Bold,
                                         color = if (isTouchscreen) Color.Black else ColorTextTouchpad
@@ -178,7 +178,7 @@ fun SettingsDialog(
                                     )
                                     Spacer(modifier = Modifier.width(6.dp))
                                     Text(
-                                        text = "Touchpad Virtual",
+                                        text = "Touchpad Virtual (Bawaan)",
                                         fontSize = 11.sp,
                                         fontWeight = FontWeight.Bold,
                                         color = if (isTouchpad) Color.Black else ColorTextTouchpad

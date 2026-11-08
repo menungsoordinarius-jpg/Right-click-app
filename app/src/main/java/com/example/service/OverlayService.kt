@@ -247,6 +247,7 @@ class OverlayService : Service() {
         } else {
             initControlPanelOverlay()
             initHandleOverlay()
+            ensureCursorOutsidePanel("onCreate")
             backendManager.resetDiagnostics()
         }
 
@@ -395,13 +396,6 @@ class OverlayService : Service() {
             gravity = Gravity.TOP or Gravity.START
             x = ((screenWidth - panelW) / 2).coerceAtLeast(10)
             y = (screenHeight * 0.25f).toInt()
-
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                try {
-                    flags = flags or WindowManager.LayoutParams.FLAG_BLUR_BEHIND
-                    blurBehindRadius = (25 * density).toInt()
-                } catch (_: Throwable) {}
-            }
         }
 
         panelView = ComposeView(this).apply {
@@ -431,8 +425,8 @@ class OverlayService : Service() {
 
                     ControlPanel(
                         backendState = backendState,
-                        cursorX = cursorXState.floatValue,
-                        cursorY = cursorYState.floatValue,
+                        cursorX = { cursorXState.floatValue },
+                        cursorY = { cursorYState.floatValue },
                         recordMode = recordModeState.value,
                         panelBehavior = panelBehaviorState.value,
                         inputMode = touchSettingsState.value.inputMode,
@@ -849,6 +843,7 @@ class OverlayService : Service() {
         } else {
             initControlPanelOverlay()
             initHandleOverlay()
+            ensureCursorOutsidePanel("mode berganti ke Touchpad")
             backendManager.resetDiagnostics()
         }
 
@@ -863,71 +858,253 @@ class OverlayService : Service() {
         }
     }
 
-    private fun clampOutsideRect(
-        x: Float,
-        y: Float,
-        left: Float,
-        top: Float,
-        right: Float,
-        bottom: Float
-    ): Pair<Float, Float> {
-        if (x < left || x > right || y < top || y > bottom) {
-            return Pair(x, y)
-        }
-
-        val dLeft = x - left
-        val dRight = right - x
-        val dTop = y - top
-        val dBottom = bottom - y
-
-        val minD = minOf(dLeft, dRight, dTop, dBottom)
-        return when (minD) {
-            dLeft -> Pair(left, y)
-            dRight -> Pair(right, y)
-            dTop -> Pair(x, top)
-            else -> Pair(x, bottom)
+    private data class ObstacleRect(
+        val left: Float,
+        val top: Float,
+        val right: Float,
+        val bottom: Float
+    ) {
+        fun contains(x: Float, y: Float): Boolean {
+            return x >= left && x <= right && y >= top && y <= bottom
         }
     }
 
-    private fun applyDindingMode(targetX: Float, targetY: Float): Pair<Float, Float> {
+    private fun getObstacleRects(): List<ObstacleRect> {
         val density = resources.displayMetrics.density
-        val pParams = panelParams ?: return Pair(targetX, targetY)
-        val panelW = pParams.width.toFloat()
-        val panelH = if (panelView != null && panelView!!.height > 0) panelView!!.height.toFloat() else 310f * density
+        val marginPx = 12f * density
+        val list = mutableListOf<ObstacleRect>()
 
-        val pLeft = pParams.x.toFloat()
-        val pTop = pParams.y.toFloat()
-        val pRight = pLeft + panelW
-        val pBottom = pTop + panelH
-
-        val (afterPanelX, afterPanelY) = clampOutsideRect(targetX, targetY, pLeft, pTop, pRight, pBottom)
-
-        val hParams = handleParams
-        if (hParams != null) {
-            val handleW = hParams.width.toFloat()
-            val handleH = hParams.height.toFloat()
-            val hLeft = hParams.x.toFloat()
-            val hTop = hParams.y.toFloat()
-            val hRight = hLeft + handleW
-            val hBottom = hTop + handleH
-
-            val (afterHandleX, afterHandleY) = clampOutsideRect(afterPanelX, afterPanelY, hLeft, hTop, hRight, hBottom)
-            if (afterHandleX in pLeft..pRight && afterHandleY in pTop..pBottom) {
-                return clampOutsideRect(afterHandleX, afterHandleY, pLeft, pTop, pRight, pBottom)
-            }
-            return Pair(afterHandleX, afterHandleY)
+        panelParams?.let { pParams ->
+            val pW = if (panelView != null && panelView!!.width > 0) panelView!!.width.toFloat()
+                     else pParams.width.toFloat()
+            val pH = if (panelView != null && panelView!!.height > 0) panelView!!.height.toFloat()
+                     else 310f * density
+            val pLeft = pParams.x.toFloat() - marginPx
+            val pTop = pParams.y.toFloat() - marginPx
+            val pRight = pParams.x.toFloat() + pW + marginPx
+            val pBottom = pParams.y.toFloat() + pH + marginPx
+            list.add(ObstacleRect(pLeft, pTop, pRight, pBottom))
         }
 
-        return Pair(afterPanelX, afterPanelY)
+        handleParams?.let { hParams ->
+            val hW = if (handleView != null && handleView!!.width > 0) handleView!!.width.toFloat()
+                     else hParams.width.toFloat()
+            val hH = if (handleView != null && handleView!!.height > 0) handleView!!.height.toFloat()
+                     else 32f * density
+            val hLeft = hParams.x.toFloat() - marginPx
+            val hTop = hParams.y.toFloat() - marginPx
+            val hRight = hParams.x.toFloat() + hW + marginPx
+            val hBottom = hParams.y.toFloat() + hH + marginPx
+            list.add(ObstacleRect(hLeft, hTop, hRight, hBottom))
+        }
+
+        return list
+    }
+
+    private fun isInsideAnyObstacle(x: Float, y: Float, obstacles: List<ObstacleRect>): Boolean {
+        for (rect in obstacles) {
+            if (rect.contains(x, y)) return true
+        }
+        return false
+    }
+
+    /**
+     * Memastikan kursor berada di luar persegi panel dan handle (dengan margin 12dp).
+     * Jika berada di dalam, kursor dipindahkan SEKALI ke titik terdekat di luar persegi.
+     */
+    private fun ensureCursorOutsidePanel(reason: String) {
+        if (touchSettingsState.value.inputMode != InputMode.TOUCHPAD) return
+        if (panelBehaviorState.value != PanelBehavior.DINDING) return
+
+        val obstacles = getObstacleRects()
+        if (obstacles.isEmpty()) return
+
+        var curX = cursorXState.floatValue
+        var curY = cursorYState.floatValue
+
+        if (!isInsideAnyObstacle(curX, curY, obstacles)) {
+            return
+        }
+
+        val originalX = curX
+        val originalY = curY
+
+        // Pindahkan sekali ke titik terdekat di luar persegi dengan margin 12dp
+        for (rect in obstacles) {
+            if (rect.contains(curX, curY)) {
+                val dLeft = curX - rect.left
+                val dRight = rect.right - curX
+                val dTop = curY - rect.top
+                val dBottom = rect.bottom - curY
+                val minD = minOf(dLeft, dRight, dTop, dBottom)
+                when (minD) {
+                    dLeft -> curX = rect.left - 1f
+                    dRight -> curX = rect.right + 1f
+                    dTop -> curY = rect.top - 1f
+                    else -> curY = rect.bottom + 1f
+                }
+            }
+        }
+
+        for (rect in obstacles) {
+            if (rect.contains(curX, curY)) {
+                val dLeft = curX - rect.left
+                val dRight = rect.right - curX
+                val dTop = curY - rect.top
+                val dBottom = rect.bottom - curY
+                val minD = minOf(dLeft, dRight, dTop, dBottom)
+                when (minD) {
+                    dLeft -> curX = rect.left - 1f
+                    dRight -> curX = rect.right + 1f
+                    dTop -> curY = rect.top - 1f
+                    else -> curY = rect.bottom + 1f
+                }
+            }
+        }
+
+        curX = curX.coerceIn(0f, screenWidth.toFloat())
+        curY = curY.coerceIn(0f, screenHeight.toFloat())
+
+        cursorXState.floatValue = curX
+        cursorYState.floatValue = curY
+        scheduleCursorWindowUpdate()
+        backendManager.move(curX, curY)
+
+        Log.i(TAG, "Kursor berada di dalam persegi panel/handle [$reason] ($originalX, $originalY), dipindahkan keluar ke ($curX, $curY) dengan margin 12dp")
+    }
+
+    private fun clampAxisX(
+        prevX: Float,
+        targetX: Float,
+        y: Float,
+        obstacles: List<ObstacleRect>
+    ): Float {
+        var clampedX = targetX
+        for (rect in obstacles) {
+            if (y > rect.top && y < rect.bottom) {
+                if (targetX > prevX) {
+                    if (prevX <= rect.left && clampedX >= rect.left) {
+                        clampedX = rect.left
+                    } else if (clampedX > rect.left && clampedX < rect.right) {
+                        clampedX = rect.left
+                    }
+                } else if (targetX < prevX) {
+                    if (prevX >= rect.right && clampedX <= rect.right) {
+                        clampedX = rect.right
+                    } else if (clampedX > rect.left && clampedX < rect.right) {
+                        clampedX = rect.right
+                    }
+                }
+            }
+        }
+        return clampedX
+    }
+
+    private fun clampAxisY(
+        prevY: Float,
+        targetY: Float,
+        x: Float,
+        obstacles: List<ObstacleRect>
+    ): Float {
+        var clampedY = targetY
+        for (rect in obstacles) {
+            if (x > rect.left && x < rect.right) {
+                if (targetY > prevY) {
+                    if (prevY <= rect.top && clampedY >= rect.top) {
+                        clampedY = rect.top
+                    } else if (clampedY > rect.top && clampedY < rect.bottom) {
+                        clampedY = rect.top
+                    }
+                } else if (targetY < prevY) {
+                    if (prevY >= rect.bottom && clampedY <= rect.bottom) {
+                        clampedY = rect.bottom
+                    } else if (clampedY > rect.top && clampedY < rect.bottom) {
+                        clampedY = rect.bottom
+                    }
+                }
+            }
+        }
+        return clampedY
+    }
+
+    /**
+     * Menggeser kursor menyusuri tepi persegi (per sumbu berdasarkan posisi sebelumnya).
+     */
+    private fun applyDindingSliding(
+        prevX: Float,
+        prevY: Float,
+        targetX: Float,
+        targetY: Float
+    ): Pair<Float, Float> {
+        val obstacles = getObstacleRects()
+        if (obstacles.isEmpty()) return Pair(targetX, targetY)
+
+        var startX = prevX
+        var startY = prevY
+        if (isInsideAnyObstacle(startX, startY, obstacles)) {
+            for (rect in obstacles) {
+                if (rect.contains(startX, startY)) {
+                    val dL = startX - rect.left
+                    val dR = rect.right - startX
+                    val dT = startY - rect.top
+                    val dB = rect.bottom - startY
+                    val minD = minOf(dL, dR, dT, dB)
+                    when (minD) {
+                        dL -> startX = rect.left - 1f
+                        dR -> startX = rect.right + 1f
+                        dT -> startY = rect.top - 1f
+                        else -> startY = rect.bottom + 1f
+                    }
+                }
+            }
+            Log.i(TAG, "Kursor berada di dalam persegi panel, dipindahkan ke ($startX, $startY) dengan margin 12dp")
+        }
+
+        // Jalur 1: Sumbu X dulu, lalu Sumbu Y
+        val x1 = clampAxisX(startX, targetX, startY, obstacles)
+        val y1 = clampAxisY(startY, targetY, x1, obstacles)
+
+        // Jalur 2: Sumbu Y dulu, lalu Sumbu X
+        val y2 = clampAxisY(startY, targetY, startX, obstacles)
+        val x2 = clampAxisX(startX, targetX, y2, obstacles)
+
+        // Pilih jalur yang paling mendekati target (menyusuri tepi terdekat)
+        val d1 = hypot(x1 - targetX, y1 - targetY)
+        val d2 = hypot(x2 - targetX, y2 - targetY)
+
+        val (bestX, bestY) = if (d1 <= d2) Pair(x1, y1) else Pair(x2, y2)
+
+        var finalX = bestX
+        var finalY = bestY
+        for (rect in obstacles) {
+            if (rect.contains(finalX, finalY)) {
+                val dL = finalX - rect.left
+                val dR = rect.right - finalX
+                val dT = finalY - rect.top
+                val dB = rect.bottom - finalY
+                val minD = minOf(dL, dR, dT, dB)
+                when (minD) {
+                    dL -> finalX = rect.left
+                    dR -> finalX = rect.right
+                    dT -> finalY = rect.top
+                    else -> finalY = rect.bottom
+                }
+            }
+        }
+
+        return Pair(finalX, finalY)
     }
 
     private fun updateCursorPosition(newX: Float, newY: Float) {
+        val prevX = cursorXState.floatValue
+        val prevY = cursorYState.floatValue
+
         var clampedX = newX.coerceIn(0f, screenWidth.toFloat())
         var clampedY = newY.coerceIn(0f, screenHeight.toFloat())
 
-        // Mode DINDING pada Touchpad
+        // Mode DINDING pada Touchpad: geser kursor menyusuri tepi persegi (per sumbu)
         if (touchSettingsState.value.inputMode == InputMode.TOUCHPAD && panelBehaviorState.value == PanelBehavior.DINDING) {
-            val (walledX, walledY) = applyDindingMode(clampedX, clampedY)
+            val (walledX, walledY) = applyDindingSliding(prevX, prevY, clampedX, clampedY)
             clampedX = walledX.coerceIn(0f, screenWidth.toFloat())
             clampedY = walledY.coerceIn(0f, screenHeight.toFloat())
         }
@@ -1029,6 +1206,9 @@ class OverlayService : Service() {
         if (behavior != PanelBehavior.TEMBUS) {
             mainHandler.removeCallbacks(restoreTouchableRunnable)
             removeFlagNotTouchable()
+        }
+        if (behavior == PanelBehavior.DINDING) {
+            ensureCursorOutsidePanel("perilaku diubah ke Dinding")
         }
     }
 
@@ -1160,6 +1340,8 @@ class OverlayService : Service() {
                 } catch (_: Throwable) {}
             }
         }
+
+        ensureCursorOutsidePanel("panel diposisikan")
     }
 
     private fun clampAndUpdateOverlays() {
@@ -1217,6 +1399,7 @@ class OverlayService : Service() {
             panelView?.visibility = View.VISIBLE
             handleView?.visibility = View.VISIBLE
             clampAndUpdateOverlays()
+            ensureCursorOutsidePanel("overlay ditampilkan")
         }
 
         updateNotification(isHidden = false)

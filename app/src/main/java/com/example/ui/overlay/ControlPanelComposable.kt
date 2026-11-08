@@ -135,8 +135,8 @@ enum class PanelBehavior(val displayName: String) {
 @Composable
 fun ControlPanel(
     backendState: BackendState,
-    cursorX: Float,
-    cursorY: Float,
+    cursorX: () -> Float,
+    cursorY: () -> Float,
     recordMode: RecordMode = RecordMode.OFF,
     panelBehavior: PanelBehavior = PanelBehavior.DINDING,
     inputMode: InputMode = InputMode.TOUCHPAD,
@@ -234,8 +234,8 @@ fun ControlPanel(
 @Composable
 fun HeaderSection(
     backendState: BackendState,
-    cursorX: Float,
-    cursorY: Float,
+    cursorX: () -> Float,
+    cursorY: () -> Float,
     recordMode: RecordMode,
     panelBehavior: PanelBehavior,
     inputMode: InputMode = InputMode.TOUCHPAD,
@@ -315,7 +315,7 @@ fun HeaderSection(
             ) {
                 Spacer(modifier = Modifier.width(14.dp))
                 Text(
-                    text = "X: ${cursorX.toInt()}  Y: ${cursorY.toInt()}",
+                    text = "X: ${cursorX().toInt()}  Y: ${cursorY().toInt()}",
                     fontFamily = FontFamily.Monospace,
                     fontSize = 9.sp,
                     fontWeight = FontWeight.Normal,
@@ -507,7 +507,7 @@ fun HeaderSection(
                             Icon(Icons.Default.Check, contentDescription = null, tint = ColorActiveGreen, modifier = Modifier.size(16.dp))
                             Spacer(modifier = Modifier.width(8.dp))
                         }
-                        Text("Mode: Layar Sentuh (Bawaan)", color = Color.White, fontSize = 12.sp)
+                        Text("Mode: Layar Sentuh (eksperimen)", color = Color.White, fontSize = 12.sp)
                     }
                 },
                 onClick = {
@@ -523,7 +523,7 @@ fun HeaderSection(
                             Icon(Icons.Default.Check, contentDescription = null, tint = ColorActiveGreen, modifier = Modifier.size(16.dp))
                             Spacer(modifier = Modifier.width(8.dp))
                         }
-                        Text("Mode: Touchpad Virtual", color = Color.White, fontSize = 12.sp)
+                        Text("Mode: Touchpad Virtual (Bawaan)", color = Color.White, fontSize = 12.sp)
                     }
                 },
                 onClick = {
